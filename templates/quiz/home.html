@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+
+{% block title %}QuizSense - Upload & Generate Quiz{% endblock %}
+
+{% block content %}
+
+<!-- Hero Section -->
+<div class="row justify-content-center mb-5">
+    <div class="col-lg-10 text-center">
+        <h1 class="display-5 fw-bold mb-2">
+            <i class="bi bi-lightning-charge-fill text-primary me-2"></i>QuizSense
+        </h1>
+        <p class="lead text-muted">
+            Upload your lecture files and let AI instantly generate a 10-question multiple-choice quiz on
+            <strong>Fundamentals of Programming</strong>.
+        </p>
+    </div>
+</div>
+
+<!-- Upload Card -->
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white py-3">
+                <h5 class="mb-0"><i class="bi bi-upload me-2"></i>Upload Your File</h5>
+            </div>
+            <div class="card-body p-4">
+                <form method="POST" enctype="multipart/form-data" id="uploadForm">
+                    {% csrf_token %}
+
+                    <!-- Chapter Select -->
+                    <div class="mb-4">
+                        <label for="{{ form.chapter.id_for_label }}" class="form-label fw-semibold">
+                            <i class="bi bi-book me-1 text-primary"></i>Select Chapter
+                        </label>
+                        {{ form.chapter }}
+                        {% if form.chapter.errors %}
+                            <div class="text-danger small mt-1">{{ form.chapter.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+
+                    <!-- File Upload Drop Zone -->
+                    <div class="mb-4">
+                        <label for="{{ form.file.id_for_label }}" class="form-label fw-semibold">
+                            <i class="bi bi-file-earmark-arrow-up me-1 text-primary"></i>Upload PDF or Word Files
+                        </label>
+                        <div class="upload-zone border border-2 border-dashed rounded-3 p-4 text-center"
+                             id="uploadZone"
+                             onclick="document.getElementById('{{ form.files.id_for_label }}').click()"
+                             style="cursor:pointer; border-color: #0d6efd !important; background: #f0f6ff;">
+                            <i class="bi bi-cloud-arrow-up-fill text-primary" style="font-size:2.5rem;"></i>
+                            <p class="mt-2 mb-1 fw-semibold text-primary" id="uploadLabel">Click or drag & drop your files here</p>
+                            <p class="text-muted small mb-0">Supports PDF and Word (.docx) — Max 10 MB each</p>
+                            <div style="display:none;">{{ form.files }}</div>
+                        </div>
+                        <div id="fileNameDisplay" class="mt-2 text-success small fw-semibold"></div>
+                        {% if form.files.errors %}
+                            <div class="text-danger small mt-1">{{ form.files.errors.0 }}</div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Submit Button -->
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+                            <i class="bi bi-magic me-2"></i>Generate Study Summary + Quiz with AI
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- How It Works -->
+<div class="row justify-content-center mt-5">
+    <div class="col-lg-10">
+        <h5 class="text-center text-muted mb-4 fw-semibold">How It Works</h5>
+        <div class="row g-3 text-center">
+            <div class="col-md-3">
+                <div class="card h-100 border-0 bg-white shadow-sm p-3">
+                    <i class="bi bi-upload text-primary mb-2" style="font-size:2rem;"></i>
+                    <h6 class="fw-bold">1. Upload</h6>
+                    <p class="text-muted small mb-0">Upload one or more PDF/Word lecture files</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card h-100 border-0 bg-white shadow-sm p-3">
+                    <i class="bi bi-file-text text-primary mb-2" style="font-size:2rem;"></i>
+                    <h6 class="fw-bold">2. Extract</h6>
+                    <p class="text-muted small mb-0">OCR & parsing extract and chunk all file content</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card h-100 border-0 bg-white shadow-sm p-3">
+                    <i class="bi bi-robot text-primary mb-2" style="font-size:2rem;"></i>
+                    <h6 class="fw-bold">3. Generate</h6>
+                    <p class="text-muted small mb-0">RAG retrieves context and Gemini creates accurate MCQs</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card h-100 border-0 bg-white shadow-sm p-3">
+                    <i class="bi bi-graph-up-arrow text-primary mb-2" style="font-size:2rem;"></i>
+                    <h6 class="fw-bold">4. Improve</h6>
+                    <p class="text-muted small mb-0">Get AI insights on topics to improve</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Show selected filename in drop zone
+    const fileInput = document.getElementById('{{ form.files.id_for_label }}');
+    const fileNameDisplay = document.getElementById('fileNameDisplay');
+    const uploadLabel = document.getElementById('uploadLabel');
+
+    function updateFileLabel(files) {
+        if (!files || !files.length) {
+            fileNameDisplay.textContent = '';
+            uploadLabel.textContent = 'Click or drag & drop your files here';
+            return;
+        }
+
+        if (files.length === 1) {
+            fileNameDisplay.textContent = '✓ ' + files[0].name;
+            uploadLabel.textContent = files[0].name;
+            return;
+        }
+
+        const names = Array.from(files).map((f) => f.name).join(', ');
+        fileNameDisplay.textContent = '✓ ' + files.length + ' files selected';
+        uploadLabel.textContent = files.length + ' files selected';
+        fileNameDisplay.title = names;
+    }
+
+    fileInput.addEventListener('change', function () {
+        updateFileLabel(this.files);
+    });
+
+    // Drag & drop support
+    const uploadZone = document.getElementById('uploadZone');
+    uploadZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadZone.style.background = '#dce9ff';
+    });
+    uploadZone.addEventListener('dragleave', () => {
+        uploadZone.style.background = '#f0f6ff';
+    });
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.style.background = '#f0f6ff';
+        if (e.dataTransfer.files.length) {
+            fileInput.files = e.dataTransfer.files;
+            updateFileLabel(e.dataTransfer.files);
+        }
+    });
+
+    // Show loading state on submit
+    document.getElementById('uploadForm').addEventListener('submit', function () {
+        const btn = document.getElementById('submitBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing files, retrieving context, and generating summary...';
+    });
+</script>
+{% endblock %}
+

@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% block title %}QuizSense - Review Quiz{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+
+        <!-- Header -->
+        <div class="d-flex align-items-center mb-4">
+            <a href="{% url 'quiz_results' attempt.id %}" class="btn btn-outline-secondary me-3">
+                <i class="bi bi-arrow-left"></i>
+            </a>
+            <div>
+                <h3 class="fw-bold mb-0">Review Answers</h3>
+                <small class="text-muted">
+                    {{ attempt.quiz.chapter }} &mdash; Score: {{ attempt.score }}/{{ attempt.total_questions }}
+                </small>
+            </div>
+        </div>
+
+        <!-- Question Cards -->
+        {% for answer in answers %}
+        <div class="card mb-4"
+             style="border-left: 5px solid {% if answer.is_correct %}#198754{% else %}#dc3545{% endif %};">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span class="fw-semibold">Question {{ forloop.counter }}</span>
+                {% if answer.is_correct %}
+                <span class="badge bg-success"><i class="bi bi-check-circle-fill me-1"></i>Correct</span>
+                {% else %}
+                <span class="badge bg-danger"><i class="bi bi-x-circle-fill me-1"></i>Incorrect</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <p class="fw-semibold mb-4">{{ answer.question.text }}</p>
+
+                {% for letter, choice_text in answer.question.choices_items %}
+                <div class="mb-2 p-2 rounded border
+                    {% if letter == answer.question.correct_answer %}border-success bg-success bg-opacity-10
+                    {% elif letter == answer.selected_answer and not answer.is_correct %}border-danger bg-danger bg-opacity-10
+                    {% else %}border-light{% endif %}">
+                    <span class="badge
+                        {% if letter == answer.question.correct_answer %}bg-success
+                        {% elif letter == answer.selected_answer and not answer.is_correct %}bg-danger
+                        {% else %}bg-secondary{% endif %} me-2">{{ letter }}</span>
+                    {{ choice_text }}
+                    {% if letter == answer.question.correct_answer %}
+                    <small class="text-success ms-2 fw-semibold"><i class="bi bi-check-circle-fill"></i> Correct Answer</small>
+                    {% endif %}
+                    {% if letter == answer.selected_answer %}
+                    <small class="ms-2 fw-semibold {% if answer.is_correct %}text-success{% else %}text-danger{% endif %}">
+                        <i class="bi bi-{% if answer.is_correct %}check{% else %}x{% endif %}-circle-fill"></i> Your Answer
+                    </small>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+
+        <!-- Footer Actions -->
+        <div class="d-flex gap-3 mb-5 flex-wrap">
+            <a href="{% url 'quiz_results' attempt.id %}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left me-2"></i>Back to Results
+            </a>
+            <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-outline-primary">
+                <i class="bi bi-graph-up-arrow me-2"></i>View Insights
+            </a>
+            <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-success ms-auto">
+                <i class="bi bi-arrow-repeat me-2"></i>New Quiz (Same Topic)
+            </a>
+            <a href="{% url 'home' %}" class="btn btn-outline-secondary">
+                <i class="bi bi-upload me-2"></i>Upload New File
+            </a>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

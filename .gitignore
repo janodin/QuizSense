@@ -1,0 +1,39 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+db.sqlite3
+staticfiles/
+media/
+dataset/
+venv/
+.venv/
+
+venv/
+.venv/
+*.egg-info/
+dist/
+
+# Testing artifacts
+*.png
+*.jpg
+*.jpeg
+*.log
+.playwright-mcp/
+
+# Node.js (if added in future)
+node_modules/
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+.vercel
+.env*.local

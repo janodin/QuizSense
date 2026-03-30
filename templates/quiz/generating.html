@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+
+{% block title %}QuizSense - Generating Quiz{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-lg-6 text-center">
+        {% if error %}
+        <div class="card shadow-sm p-5">
+            <i class="bi bi-exclamation-triangle-fill text-warning mb-3" style="font-size:3.5rem;"></i>
+            <h3 class="fw-bold mb-2">Generation Failed</h3>
+            <p class="text-muted">Gemini AI could not generate questions from your file.</p>
+            {% if error_message %}
+            <div class="alert alert-warning small mt-2">{{ error_message }}</div>
+            {% endif %}
+            <a href="{% url 'home' %}" class="btn btn-primary mt-3">
+                <i class="bi bi-arrow-left me-2"></i>Try Again
+            </a>
+        </div>
+        {% else %}
+        <div class="card shadow-sm p-5">
+            <i class="bi bi-robot text-primary mb-3" style="font-size:3.5rem;"></i>
+            <h3 class="fw-bold mb-2">Generating your quiz...</h3>
+            <p class="text-muted mb-1">
+                File: <strong>{{ uploaded_file.file.name }}</strong>
+            </p>
+            <p class="text-muted">
+                Chapter: <strong>{{ uploaded_file.chapter }}</strong>
+            </p>
+            <div class="progress mt-3" style="height: 8px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 75%;"></div>
+            </div>
+            <p class="text-muted small mt-3">Gemini AI is reading your document and crafting questions&hellip;</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

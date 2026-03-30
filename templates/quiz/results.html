@@ -1,0 +1,112 @@
+{% extends 'base.html' %}
+{% block title %}QuizSense - Quiz Results{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+
+        <!-- Score Card -->
+        <div class="card text-center shadow mb-4">
+            <div class="card-body p-5">
+                <i class="bi bi-trophy-fill text-warning fs-1 mb-3 d-block"></i>
+                <h2 class="fw-bold mb-1">Quiz Complete!</h2>
+                <p class="text-muted mb-4">{{ attempt.quiz.chapter }}</p>
+
+                <!-- Score Circle -->
+                <div class="mx-auto mb-4 d-flex align-items-center justify-content-center rounded-circle
+                    {% if attempt.score_percentage >= 80 %}bg-success{% elif attempt.score_percentage >= 60 %}bg-warning{% else %}bg-danger{% endif %}"
+                    style="width:150px; height:150px;">
+                    <div class="text-white">
+                        <div style="font-size:2.8rem; font-weight:700; line-height:1.1;">{{ attempt.score_percentage }}%</div>
+                        <div style="font-size:1rem;">{{ attempt.score }}/{{ attempt.total_questions }}</div>
+                    </div>
+                </div>
+
+                {% if attempt.score_percentage >= 80 %}
+                <h4 class="text-success fw-bold">Excellent!</h4>
+                <p class="text-muted">Outstanding performance! You have a strong grasp of the material.</p>
+                {% elif attempt.score_percentage >= 60 %}
+                <h4 class="text-warning fw-bold">Good Job!</h4>
+                <p class="text-muted">Solid understanding, but a few topics could use more review.</p>
+                {% else %}
+                <h4 class="text-danger fw-bold">Keep Practicing</h4>
+                <p class="text-muted">Don't be discouraged &mdash; review the material and try again!</p>
+                {% endif %}
+
+                <div class="d-flex gap-3 justify-content-center mt-4 flex-wrap">
+                    <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-primary">
+                        <i class="bi bi-graph-up-arrow me-2"></i>View Insights
+                    </a>
+                    <a href="{% url 'review_quiz' attempt.id %}" class="btn btn-outline-primary">
+                        <i class="bi bi-eye me-2"></i>Review Answers
+                    </a>
+                    <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-success">
+                        <i class="bi bi-arrow-repeat me-2"></i>New Quiz (Same Topic)
+                    </a>
+                    <a href="{% url 'home' %}" class="btn btn-outline-secondary">
+                        <i class="bi bi-upload me-2"></i>Upload New File
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="row g-3 mb-4">
+            <div class="col-4">
+                <div class="card text-center p-3">
+                    <div class="text-success fw-bold" style="font-size:2rem;">{{ attempt.score }}</div>
+                    <div class="text-muted small">Correct</div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="card text-center p-3">
+                    <div class="text-danger fw-bold" style="font-size:2rem;">{{ incorrect }}</div>
+                    <div class="text-muted small">Incorrect</div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="card text-center p-3">
+                    <div class="text-primary fw-bold" style="font-size:2rem;">{{ attempt.total_questions }}</div>
+                    <div class="text-muted small">Total</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Topic Performance Preview -->
+        {% if topic_performance %}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light">
+                <h5 class="mb-0"><i class="bi bi-bar-chart-fill me-2"></i>Topic Performance</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-3">Quick overview of your performance by topic:</p>
+                {% for topic, stats in topic_performance %}
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <small class="fw-bold">{{ topic }}</small>
+                        <small class="badge 
+                            {% if stats.percentage >= 80 %}bg-success{% elif stats.percentage >= 60 %}bg-warning{% else %}bg-danger{% endif %}">
+                            {{ stats.percentage }}% ({{ stats.correct }}/{{ stats.total }})
+                        </small>
+                    </div>
+                    <div class="progress" style="height: 10px;">
+                        <div class="progress-bar 
+                            {% if stats.percentage >= 80 %}bg-success{% elif stats.percentage >= 60 %}bg-warning{% else %}bg-danger{% endif %}" 
+                            role="progressbar" 
+                            style="width: {{ stats.percentage }}%;">
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+                <div class="text-center mt-3">
+                    <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-sm btn-outline-primary">
+                        View Detailed Insights <i class="bi bi-arrow-right ms-1"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+</div>
+{% endblock %}
