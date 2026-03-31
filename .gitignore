@@ -21,6 +21,8 @@ dist/
 *.jpeg
 *.log
 .playwright-mcp/
+!static/logo.png
+!static/favicon.ico
 
 # Node.js (if added in future)
 node_modules/
