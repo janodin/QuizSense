@@ -11,9 +11,18 @@
     <!-- Bootstrap Icons -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <style>
+        :root {
+            --qs-radius: 0.875rem;
+            --qs-space-1: 0.5rem;
+            --qs-space-2: 1rem;
+            --qs-space-3: 1.5rem;
+            --qs-space-4: 2rem;
+            --qs-shadow: 0 4px 14px rgba(0,0,0,0.08);
+        }
         body {
             background-color: #f8f9fa;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.55;
         }
         .navbar-brand {
             font-weight: 700;
@@ -27,6 +36,15 @@
         .navbar-brand, .nav-link {
             color: #fff !important;
         }
+        .navbar-toggler {
+            border-color: rgba(255, 255, 255, 0.45);
+        }
+        .navbar-toggler:focus {
+            box-shadow: 0 0 0 0.2rem rgba(255,255,255,0.25);
+        }
+        .navbar-toggler-icon {
+            filter: invert(1);
+        }
         .footer {
             background: #212529;
             color: #adb5bd;
@@ -34,7 +52,12 @@
         }
         .card {
             border: none;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+            border-radius: var(--qs-radius);
+            box-shadow: var(--qs-shadow);
+        }
+        .main-content {
+            margin-top: var(--qs-space-4);
+            margin-bottom: var(--qs-space-4);
         }
         .btn-primary {
             background: linear-gradient(135deg, #0d6efd, #0a58ca);
@@ -42,6 +65,39 @@
         }
         .btn-primary:hover {
             background: linear-gradient(135deg, #0a58ca, #084298);
+        }
+        .btn {
+            border-radius: 0.75rem;
+            transition: transform .15s ease, box-shadow .15s ease;
+        }
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+        .btn:focus-visible,
+        .form-control:focus-visible,
+        .form-select:focus-visible {
+            outline: 0;
+            box-shadow: 0 0 0 0.2rem rgba(13,110,253,0.25);
+        }
+        .back-to-top {
+            position: fixed;
+            right: 1rem;
+            bottom: 1rem;
+            z-index: 1200;
+            display: none;
+        }
+        .back-to-top.show {
+            display: inline-flex;
+        }
+        @media (max-width: 576px) {
+            .main-content {
+                margin-top: var(--qs-space-3);
+                margin-bottom: var(--qs-space-3);
+            }
+            .navbar-brand {
+                font-size: 1.2rem;
+                letter-spacing: 0.5px;
+            }
         }
     </style>
     {% block extra_css %}{% endblock %}
@@ -51,8 +107,9 @@
     <!-- Navbar -->
     <nav class="navbar navbar-expand-lg">
         <div class="container">
-            <a class="navbar-brand" href="{% url 'home' %}">
-                <i class="bi bi-lightning-charge-fill me-2"></i>QuizSense
+            <a class="navbar-brand d-flex align-items-center" href="{% url 'home' %}">
+                <img src="{% static 'logo.png' %}" alt="QuizSense Logo" style="width: 32px; height: 32px; margin-right: 8px;">
+                QuizSense
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -82,7 +139,7 @@
     {% endif %}
 
     <!-- Main Content -->
-    <main class="container my-4">
+    <main class="container main-content">
         {% block content %}{% endblock %}
     </main>
 
@@ -93,8 +150,25 @@
         </div>
     </footer>
 
+    <button type="button" class="btn btn-primary back-to-top" id="backToTopBtn" aria-label="Back to top">
+        <i class="bi bi-arrow-up"></i>
+    </button>
+
     <!-- Bootstrap 5 JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const backToTopBtn = document.getElementById('backToTopBtn');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 350) {
+                backToTopBtn.classList.add('show');
+            } else {
+                backToTopBtn.classList.remove('show');
+            }
+        });
+        backToTopBtn.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

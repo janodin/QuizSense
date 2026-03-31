@@ -1,6 +1,18 @@
 {% extends 'base.html' %}
 {% block title %}QuizSense - Quiz Insights{% endblock %}
 
+{% block extra_css %}
+<style>
+    .recommendation-text {
+        line-height: 1.7;
+        white-space: pre-line;
+    }
+    .chart-wrap {
+        height: 280px;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-lg-9">
@@ -12,15 +24,15 @@
             <p class="text-muted">{{ chapter_name }}</p>
         </div>
 
-        <!-- AI Recommendations Card -->
+        <!-- Study Recommendations Card -->
         {% if attempt.ai_recommendation %}
         <div class="card shadow mb-4">
             <div class="card-header bg-primary text-white">
-                <h5 class="mb-0"><i class="bi bi-robot me-2"></i>AI-Generated Recommendations</h5>
+                <h5 class="mb-0"><i class="bi bi-lightbulb me-2"></i>Study Recommendations</h5>
             </div>
             <div class="card-body">
                 <div class="alert alert-info mb-0">
-                    <p class="mb-0" style="white-space: pre-wrap;">{{ attempt.ai_recommendation }}</p>
+                    <div class="recommendation-text">{{ attempt.ai_recommendation|safe }}</div>
                 </div>
             </div>
         </div>
@@ -128,6 +140,9 @@
                 <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Topic-wise Performance Breakdown</h5>
             </div>
             <div class="card-body">
+                <div class="chart-wrap mb-4">
+                    <canvas id="insightsTopicChart"></canvas>
+                </div>
                 <div class="table-responsive">
                     <table class="table table-hover">
                         <thead>
@@ -173,7 +188,7 @@
 
         <!-- Action Buttons -->
         <div class="text-center mb-4">
-            <a href="{% url 'review_quiz' attempt.id %}" class="btn btn-outline-primary me-2">
+            <a href="{% url 'review_quiz' attempt.id %}" class="btn btn-primary me-2">
                 <i class="bi bi-eye me-2"></i>Review Answers
             </a>
             <a href="{% url 'quiz_results' attempt.id %}" class="btn btn-outline-secondary me-2">
@@ -189,4 +204,39 @@
 
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const labels = [{% for topic, stats in topic_stats %}"{{ topic|escapejs }}"{% if not forloop.last %}, {% endif %}{% endfor %}];
+    const values = [{% for topic, stats in topic_stats %}{{ stats.percentage }}{% if not forloop.last %}, {% endif %}{% endfor %}];
+    const colors = values.map((v) => v >= 80 ? '#198754' : (v >= 60 ? '#ffc107' : '#dc3545'));
+
+    if (labels.length) {
+        const ctx = document.getElementById('insightsTopicChart');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Topic Score %',
+                    data: values,
+                    backgroundColor: colors,
+                    borderRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, max: 100 }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+</script>
 {% endblock %}

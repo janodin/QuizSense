@@ -65,12 +65,28 @@
 - [x] Style quiz results page (Figure 6 from paper)
 - [x] Style review quiz page (Figure 7 from paper)
 - [x] Style insights page (Figure 8 from paper)
+- [x] Apply cross-page UI/UX refinements aligned with CamantoOutline.pdf (spacing, hierarchy, responsiveness, accessibility)
+- [x] Add Phase 2 UX polish (question-by-question quiz navigation, charts, and long-page navigation aids)
 
 ## Phase 9: Seed Data & Testing
 - [x] Seed the 5 chapters and 38 topics into the database
 - [x] Test full quiz flow (upload → OCR/parse → Gemini generates MCQs → take quiz → results → AI insights)
 - [ ] Test Gemini API responses and edge cases
 
-## Phase 10: Deployment
+## Phase 10: RAG Implementation & Optimization
+- [x] Implement pgvector extension and vector fields
+- [x] Create TextbookChunk and UploadedChunk models with embeddings
+- [x] Implement chunking service (500 words, 100 overlap)
+- [x] Implement embedding service (sentence-transformers/all-MiniLM-L6-v2)
+- [x] Implement RAG retrieval service with cosine similarity
+- [x] Wire RAG into quiz generation and summary flows
+- [x] Create textbook ingestion management command
+- [x] Create chapter mapping manifest for proper distribution
+- [x] Update ingestion to use manifest-based chapter assignment
+- [ ] Re-ingest textbooks with proper chapter distribution (run: `python manage.py ingest_all_textbooks --reset`)
+- [ ] Verify all chapters have textbook chunks (not just Chapter 1)
+- [ ] Test RAG retrieval returns textbook context for all chapters
+
+## Phase 11: Deployment
 - [x] Prepare Render deployment configuration (`render.yaml`)
 - [x] Add production-ready Django settings for hosted deployment

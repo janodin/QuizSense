@@ -21,6 +21,22 @@
     .btn-check:checked + .choice-btn { 
         font-weight: 600; 
     }
+    .question-card.d-none {
+        display: none !important;
+    }
+    .question-chip {
+        min-width: 2.2rem;
+    }
+    .quiz-nav {
+        position: sticky;
+        bottom: 0.75rem;
+        z-index: 1030;
+        background: rgba(248,249,250,0.95);
+        backdrop-filter: blur(4px);
+        border-radius: 0.875rem;
+        padding: 0.75rem;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+    }
 </style>
 {% endblock %}
 
@@ -47,8 +63,21 @@
         <form method="post" action="{% url 'submit_quiz' quiz.id %}" id="quizForm">
             {% csrf_token %}
 
+            <div class="mb-3 d-flex flex-wrap gap-2" id="questionChips">
+                {% for question in questions %}
+                <button type="button"
+                        class="btn btn-sm btn-outline-secondary question-chip"
+                        data-jump="{{ forloop.counter0 }}"
+                        aria-label="Go to question {{ forloop.counter }}">
+                    {{ forloop.counter }}
+                </button>
+                {% endfor %}
+            </div>
+
             {% for question in questions %}
-            <div class="card mb-4 question-card" id="qcard-{{ forloop.counter }}">
+            <div class="card mb-4 question-card {% if not forloop.first %}d-none{% endif %}"
+                 id="qcard-{{ forloop.counter }}"
+                 data-index="{{ forloop.counter0 }}">
                 <div class="card-header d-flex justify-content-between align-items-center bg-light">
                     <span class="fw-semibold text-primary">
                         Question {{ forloop.counter }}
@@ -67,10 +96,9 @@
                             <input type="radio"
                                    class="btn-check"
                                    name="q_{{ question.id }}"
-                                   id="q{{ question.id }}_{{ letter }}"
-                                   value="{{ letter }}"
-                                   autocomplete="off"
-                                   required>
+                                    id="q{{ question.id }}_{{ letter }}"
+                                    value="{{ letter }}"
+                                    autocomplete="off">
                             <label class="btn btn-outline-primary choice-btn w-100 text-start py-2 px-3"
                                    for="q{{ question.id }}_{{ letter }}">
                                 <span class="badge bg-secondary me-2">{{ letter }}</span>{{ choice_text }}
@@ -86,8 +114,14 @@
                 <i class="bi bi-exclamation-triangle me-2"></i>Please answer all questions before submitting.
             </div>
 
-            <div class="d-grid mb-5">
-                <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+            <div class="quiz-nav d-flex gap-2 mb-5">
+                <button type="button" class="btn btn-outline-secondary" id="prevBtn">
+                    <i class="bi bi-arrow-left me-1"></i>Previous
+                </button>
+                <button type="button" class="btn btn-outline-primary ms-auto" id="nextBtn">
+                    Next<i class="bi bi-arrow-right ms-1"></i>
+                </button>
+                <button type="submit" class="btn btn-primary d-none" id="submitBtn">
                     <i class="bi bi-check-circle me-2"></i>Submit Quiz
                 </button>
             </div>
@@ -100,6 +134,24 @@
 {% block extra_js %}
 <script>
 const totalQ = {{ questions|length }};
+let activeIndex = 0;
+const cards = Array.from(document.querySelectorAll('.question-card'));
+const chips = Array.from(document.querySelectorAll('.question-chip'));
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+const submitBtn = document.getElementById('submitBtn');
+
+function refreshNavigation() {
+    cards.forEach((card, idx) => card.classList.toggle('d-none', idx !== activeIndex));
+    chips.forEach((chip, idx) => {
+        chip.classList.toggle('btn-primary', idx === activeIndex);
+        chip.classList.toggle('btn-outline-secondary', idx !== activeIndex);
+    });
+    prevBtn.disabled = activeIndex === 0;
+    const isLast = activeIndex === totalQ - 1;
+    nextBtn.classList.toggle('d-none', isLast);
+    submitBtn.classList.toggle('d-none', !isLast);
+}
 
 function updateProgress() {
     const checked = new Set(
@@ -111,8 +163,35 @@ function updateProgress() {
 
 document.querySelectorAll('input.btn-check').forEach(r => r.addEventListener('change', function () {
     updateProgress();
+    const card = this.closest('.question-card');
+    const idx = Number(card.dataset.index);
+    const chip = chips[idx];
+    chip.classList.remove('btn-outline-secondary');
+    chip.classList.add('btn-success');
     document.getElementById('validation-message').classList.add('d-none');
 }));
+
+chips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+        activeIndex = Number(chip.dataset.jump);
+        refreshNavigation();
+        cards[activeIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+});
+
+prevBtn.addEventListener('click', () => {
+    if (activeIndex > 0) {
+        activeIndex -= 1;
+        refreshNavigation();
+    }
+});
+
+nextBtn.addEventListener('click', () => {
+    if (activeIndex < totalQ - 1) {
+        activeIndex += 1;
+        refreshNavigation();
+    }
+});
 
 document.getElementById('quizForm').addEventListener('submit', function (e) {
     const all = new Set(Array.from(document.querySelectorAll('input.btn-check')).map(r => r.name));
@@ -122,10 +201,17 @@ document.getElementById('quizForm').addEventListener('submit', function (e) {
             e.preventDefault();
             document.getElementById('validation-message').classList.remove('d-none');
             const el = document.querySelector(`input[name="${name}"]`);
-            if (el) el.closest('.question-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (el) {
+                activeIndex = Number(el.closest('.question-card').dataset.index);
+                refreshNavigation();
+                el.closest('.question-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
             return;
         }
     }
 });
+
+updateProgress();
+refreshNavigation();
 </script>
 {% endblock %}

@@ -259,7 +259,7 @@ def submit_quiz(request, quiz_id):
         attempt.ai_recommendation = recommendation
         attempt.save()
     except Exception as e:
-        messages.warning(request, f"Quiz submitted successfully, but AI recommendations could not be generated: {e}")
+        messages.warning(request, f"Quiz submitted successfully, but study recommendations could not be generated: {e}")
         attempt.save()
         return redirect('quiz_results', attempt_id=attempt.id)
 
@@ -304,7 +304,7 @@ def review_quiz(request, attempt_id):
 
 
 def quiz_insights(request, attempt_id):
-    """Display detailed AI-powered insights and recommendations for a quiz attempt."""
+    """Display detailed insights and recommendations for a quiz attempt."""
     attempt = get_object_or_404(QuizAttempt, id=attempt_id)
     answers = attempt.answers.select_related('question', 'question__topic', 'question__chapter').all()
     

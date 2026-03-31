@@ -9,7 +9,7 @@
         <div class="card shadow-sm p-5">
             <i class="bi bi-exclamation-triangle-fill text-warning mb-3" style="font-size:3.5rem;"></i>
             <h3 class="fw-bold mb-2">Generation Failed</h3>
-            <p class="text-muted">Gemini AI could not generate questions from your file.</p>
+            <p class="text-muted">We could not generate questions from your file.</p>
             {% if error_message %}
             <div class="alert alert-warning small mt-2">{{ error_message }}</div>
             {% endif %}
@@ -30,7 +30,7 @@
             <div class="progress mt-3" style="height: 8px;">
                 <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width: 75%;"></div>
             </div>
-            <p class="text-muted small mt-3">Gemini AI is reading your document and crafting questions&hellip;</p>
+            <p class="text-muted small mt-3">Reading your document and crafting questions&hellip;</p>
         </div>
         {% endif %}
     </div>

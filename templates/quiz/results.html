@@ -1,6 +1,33 @@
 {% extends 'base.html' %}
 {% block title %}QuizSense - Quiz Results{% endblock %}
 
+{% block extra_css %}
+<style>
+    .chart-wrap {
+        height: 280px;
+    }
+    .results-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin-top: 1.25rem;
+    }
+    .results-actions .btn {
+        width: 100%;
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.75rem 1rem;
+    }
+    @media (max-width: 576px) {
+        .results-actions {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-lg-7">
@@ -33,17 +60,17 @@
                 <p class="text-muted">Don't be discouraged &mdash; review the material and try again!</p>
                 {% endif %}
 
-                <div class="d-flex gap-3 justify-content-center mt-4 flex-wrap">
-                    <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-primary">
+                <div class="results-actions">
+                    <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-outline-primary btn-sm">
                         <i class="bi bi-graph-up-arrow me-2"></i>View Insights
                     </a>
-                    <a href="{% url 'review_quiz' attempt.id %}" class="btn btn-outline-primary">
+                    <a href="{% url 'review_quiz' attempt.id %}" class="btn btn-outline-primary btn-sm">
                         <i class="bi bi-eye me-2"></i>Review Answers
                     </a>
-                    <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-success">
+                    <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-outline-success btn-sm">
                         <i class="bi bi-arrow-repeat me-2"></i>New Quiz (Same Topic)
                     </a>
-                    <a href="{% url 'home' %}" class="btn btn-outline-secondary">
+                    <a href="{% url 'home' %}" class="btn btn-outline-secondary btn-sm">
                         <i class="bi bi-upload me-2"></i>Upload New File
                     </a>
                 </div>
@@ -79,6 +106,9 @@
                 <h5 class="mb-0"><i class="bi bi-bar-chart-fill me-2"></i>Topic Performance</h5>
             </div>
             <div class="card-body">
+                <div class="chart-wrap mb-3">
+                    <canvas id="resultsTopicChart"></canvas>
+                </div>
                 <p class="text-muted mb-3">Quick overview of your performance by topic:</p>
                 {% for topic, stats in topic_performance %}
                 <div class="mb-2">
@@ -109,4 +139,39 @@
 
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const topicLabels = [{% for topic, stats in topic_performance %}"{{ topic|escapejs }}"{% if not forloop.last %}, {% endif %}{% endfor %}];
+    const topicScores = [{% for topic, stats in topic_performance %}{{ stats.percentage }}{% if not forloop.last %}, {% endif %}{% endfor %}];
+    const topicColors = topicScores.map((v) => v >= 80 ? '#198754' : (v >= 60 ? '#ffc107' : '#dc3545'));
+
+    if (topicLabels.length) {
+        const ctx = document.getElementById('resultsTopicChart');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: topicLabels,
+                datasets: [{
+                    label: 'Score %',
+                    data: topicScores,
+                    backgroundColor: topicColors,
+                    borderRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, max: 100 }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+</script>
 {% endblock %}

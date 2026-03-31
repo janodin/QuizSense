@@ -1,6 +1,37 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block title %}QuizSense - Upload & Generate Quiz{% endblock %}
+
+{% block extra_css %}
+<style>
+    .hero-logo {
+        width: 48px;
+        height: 48px;
+        vertical-align: middle;
+        margin-right: 12px;
+    }
+    .upload-zone {
+        cursor: pointer;
+        border-color: #0d6efd !important;
+        background: #f0f6ff;
+        transition: background-color .2s ease, border-color .2s ease, transform .2s ease;
+    }
+    .upload-zone:hover,
+    .upload-zone.is-dragover {
+        background: #dce9ff;
+        border-color: #0a58ca !important;
+        transform: translateY(-1px);
+    }
+    @media (max-width: 576px) {
+        .hero-logo {
+            width: 40px;
+            height: 40px;
+            margin-right: 8px;
+        }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
 
@@ -8,10 +39,10 @@
 <div class="row justify-content-center mb-5">
     <div class="col-lg-10 text-center">
         <h1 class="display-5 fw-bold mb-2">
-            <i class="bi bi-lightning-charge-fill text-primary me-2"></i>QuizSense
+            <img src="{% static 'logo.png' %}" alt="" class="hero-logo" aria-hidden="true">QuizSense
         </h1>
         <p class="lead text-muted">
-            Upload your lecture files and let AI instantly generate a 10-question multiple-choice quiz on
+            Upload your lecture files and instantly generate a 10-question multiple-choice quiz on
             <strong>Fundamentals of Programming</strong>.
         </p>
     </div>
@@ -46,11 +77,13 @@
                         </label>
                         <div class="upload-zone border border-2 border-dashed rounded-3 p-4 text-center"
                              id="uploadZone"
-                             onclick="document.getElementById('{{ form.files.id_for_label }}').click()"
-                             style="cursor:pointer; border-color: #0d6efd !important; background: #f0f6ff;">
+                              onclick="document.getElementById('{{ form.files.id_for_label }}').click()"
+                             role="button"
+                             tabindex="0"
+                             aria-label="Upload files by clicking or dragging and dropping">
                             <i class="bi bi-cloud-arrow-up-fill text-primary" style="font-size:2.5rem;"></i>
                             <p class="mt-2 mb-1 fw-semibold text-primary" id="uploadLabel">Click or drag & drop your files here</p>
-                            <p class="text-muted small mb-0">Supports PDF and Word (.docx) — Max 10 MB each</p>
+                            <p class="text-muted small mb-0">Supports PDF and Word (.docx) — Max 20 MB each</p>
                             <div style="display:none;">{{ form.files }}</div>
                         </div>
                         <div id="fileNameDisplay" class="mt-2 text-success small fw-semibold"></div>
@@ -62,7 +95,7 @@
                     <!-- Submit Button -->
                     <div class="d-grid">
                         <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
-                            <i class="bi bi-magic me-2"></i>Generate Study Summary + Quiz with AI
+                            <i class="bi bi-magic me-2"></i>Generate Study Summary + Quiz
                         </button>
                     </div>
                 </form>
@@ -94,14 +127,14 @@
                 <div class="card h-100 border-0 bg-white shadow-sm p-3">
                     <i class="bi bi-robot text-primary mb-2" style="font-size:2rem;"></i>
                     <h6 class="fw-bold">3. Generate</h6>
-                    <p class="text-muted small mb-0">RAG retrieves context and Gemini creates accurate MCQs</p>
+                    <p class="text-muted small mb-0">Smart system retrieves context and creates accurate MCQs</p>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="card h-100 border-0 bg-white shadow-sm p-3">
                     <i class="bi bi-graph-up-arrow text-primary mb-2" style="font-size:2rem;"></i>
                     <h6 class="fw-bold">4. Improve</h6>
-                    <p class="text-muted small mb-0">Get AI insights on topics to improve</p>
+                    <p class="text-muted small mb-0">Get personalized insights on topics to improve</p>
                 </div>
             </div>
         </div>
@@ -144,17 +177,23 @@
     const uploadZone = document.getElementById('uploadZone');
     uploadZone.addEventListener('dragover', (e) => {
         e.preventDefault();
-        uploadZone.style.background = '#dce9ff';
+        uploadZone.classList.add('is-dragover');
     });
     uploadZone.addEventListener('dragleave', () => {
-        uploadZone.style.background = '#f0f6ff';
+        uploadZone.classList.remove('is-dragover');
     });
     uploadZone.addEventListener('drop', (e) => {
         e.preventDefault();
-        uploadZone.style.background = '#f0f6ff';
+        uploadZone.classList.remove('is-dragover');
         if (e.dataTransfer.files.length) {
             fileInput.files = e.dataTransfer.files;
             updateFileLabel(e.dataTransfer.files);
+        }
+    });
+    uploadZone.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            fileInput.click();
         }
     });
 

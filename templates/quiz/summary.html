@@ -7,6 +7,18 @@
     #summary-body ul { padding-left: 1.25rem; margin-bottom: .5rem; }
     #summary-body li { margin-bottom: .25rem; }
     #summary-body p { margin-bottom: .6rem; }
+    .summary-actions {
+        gap: 0.75rem;
+    }
+    @media (max-width: 768px) {
+        .summary-actions {
+            flex-direction: column;
+            align-items: stretch !important;
+        }
+        .summary-actions .btn {
+            width: 100%;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -110,7 +122,7 @@
         </div>
 
         <!-- Action Bar -->
-        <div class="d-flex align-items-center justify-content-between mb-5">
+        <div class="d-flex align-items-center justify-content-between mb-5 summary-actions">
             <a href="{% url 'home' %}" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left me-1"></i>Upload Different File
             </a>

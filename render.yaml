@@ -11,7 +11,7 @@ services:
     plan: free
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: python manage.py collectstatic --noinput && python manage.py migrate && python manage.py seed_chapters_topics && gunicorn quizsense.wsgi:application
+    startCommand: python manage.py collectstatic --noinput && python manage.py migrate && python manage.py seed_chapters_topics && python manage.py ingest_all_textbooks --reset && gunicorn quizsense.wsgi:application
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
@@ -31,3 +31,4 @@ services:
         value: "https://*.onrender.com"
       - key: GEMINI_API_KEY
         sync: false
+

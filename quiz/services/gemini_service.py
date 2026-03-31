@@ -71,11 +71,17 @@ RECOMMENDATION_PROMPT_TEMPLATE = (
     "You are a helpful programming tutor. A student just completed a quiz on \"{chapter_title}\".\n\n"
     "Results:\n{results_text}\n\n"
     "Score: {score}/{total} ({percentage}%)\n\n"
-    "Write 3-5 sentences of friendly, encouraging, actionable feedback that:\n"
-    "1. Acknowledges their score.\n"
-    "2. Points out the specific topics where they struggled.\n"
-    "3. Gives concrete advice on what to review.\n"
-    "Plain paragraphs only, no markdown, no bullet points."
+    "Provide actionable feedback in bullet points. Focus on:\n"
+    "1. Topics where the student struggled (be specific)\n"
+    "2. What key concepts to review\n"
+    "3. One concrete study recommendation\n\n"
+    "FORMAT REQUIREMENTS:\n"
+    "- Use HTML bullet points: <ul><li>...</li></ul>\n"
+    "- Keep each bullet concise (1-2 sentences max)\n"
+    "- Include only critical information\n"
+    "- 3-5 bullets total\n"
+    "- Use <strong> tags for topic names\n"
+    "- No introduction or conclusion - just the bullet list"
 )
 
 
