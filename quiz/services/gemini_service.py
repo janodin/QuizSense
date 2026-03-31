@@ -8,16 +8,43 @@ Responsibilities:
 """
 
 import json
+import logging
 import re
 from google import genai
 from django.conf import settings
 
 
 MODEL = "gemini-3.1-flash-lite-preview"
+logger = logging.getLogger(__name__)
 
 
 def _get_client():
     return genai.Client(api_key=settings.GEMINI_API_KEY)
+
+
+def _log_usage(operation_name, response):
+    """
+    Log Gemini usage metadata when available so usage can be monitored in app logs.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if not usage:
+        logger.info("[GeminiUsage] operation=%s usage_metadata=unavailable", operation_name)
+        return
+
+    prompt_tokens = getattr(usage, "prompt_token_count", None)
+    candidate_tokens = getattr(usage, "candidates_token_count", None)
+    total_tokens = getattr(usage, "total_token_count", None)
+    thoughts_tokens = getattr(usage, "thoughts_token_count", None)
+
+    logger.info(
+        "[GeminiUsage] operation=%s model=%s prompt_tokens=%s candidate_tokens=%s total_tokens=%s thoughts_tokens=%s",
+        operation_name,
+        MODEL,
+        prompt_tokens,
+        candidate_tokens,
+        total_tokens,
+        thoughts_tokens,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +126,7 @@ def generate_summary(text, chapter_title="Fundamentals of Programming", cross_re
     )
     try:
         response = client.models.generate_content(model=MODEL, contents=prompt)
+        _log_usage("generate_summary", response)
         return response.text.strip()
     except Exception:
         return ""
@@ -120,6 +148,7 @@ def generate_mcq_questions(text, chapter_title="Fundamentals of Programming", cr
 
     try:
         response = client.models.generate_content(model=MODEL, contents=prompt)
+        _log_usage("generate_mcq_questions", response)
         raw = response.text.strip()
     except Exception as exc:
         raise ValueError(f"AI API call failed: {exc}")
@@ -206,6 +235,7 @@ def generate_recommendations(quiz_attempt, questions_with_answers):
 
     try:
         response = client.models.generate_content(model=MODEL, contents=prompt)
+        _log_usage("generate_recommendations", response)
         return response.text.strip()
     except Exception:
         return (
