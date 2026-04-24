@@ -34,9 +34,11 @@ def embed_texts(texts):
     client = _get_client()
     try:
         # Gemini embedding API supports batching
+        # Explicitly set output_dimensionality to ensure 768
         response = client.models.embed_content(
             model=EMBEDDING_MODEL,
             contents=texts,
+            config={'output_dimensionality': 768}
         )
         return [item.values for item in response.embeddings]
     except Exception as exc:
