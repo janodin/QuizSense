@@ -26,21 +26,28 @@ def _get_client():
 def embed_texts(texts):
     """
     Generate embeddings using Gemini API instead of local model.
+    Handles batching to stay under the 100-request limit per call.
     Returns a list of vectors.
     """
     if not texts:
         return []
     
     client = _get_client()
+    all_embeddings = []
+    batch_size = 100  # Gemini limit
+
     try:
-        # Gemini embedding API supports batching
-        # Explicitly set output_dimensionality to ensure 768
-        response = client.models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=texts,
-            config={'output_dimensionality': 768}
-        )
-        return [item.values for item in response.embeddings]
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            # Explicitly set output_dimensionality to ensure 768
+            response = client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=batch,
+                config={'output_dimensionality': 768}
+            )
+            all_embeddings.extend([item.values for item in response.embeddings])
+        
+        return all_embeddings
     except Exception as exc:
         logger.error(f"Gemini embedding failed: {exc}")
         raise ValueError(f"Gemini embedding failed: {exc}")
