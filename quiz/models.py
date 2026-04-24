@@ -130,7 +130,7 @@ class TextbookChunk(models.Model):
     source_title = models.CharField(max_length=255)
     chunk_index = models.PositiveIntegerField()
     content = models.TextField()
-    embedding = VectorField(dimensions=384)
+    embedding = VectorField(dimensions=768)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -146,7 +146,7 @@ class UploadedChunk(models.Model):
     chapter = models.ForeignKey(Chapter, on_delete=models.CASCADE, related_name='uploaded_chunks')
     chunk_index = models.PositiveIntegerField()
     content = models.TextField()
-    embedding = VectorField(dimensions=384)
+    embedding = VectorField(dimensions=768)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

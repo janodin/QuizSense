@@ -171,6 +171,5 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 # Gemini API
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 
-# Local embeddings / RAG
-SENTENCE_TRANSFORMER_MODEL = os.getenv('SENTENCE_TRANSFORMER_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')
-EMBEDDING_DIMENSIONS = 384
+# Embeddings / RAG
+EMBEDDING_DIMENSIONS = 768
