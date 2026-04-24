@@ -25,43 +25,49 @@ def home(request):
                 session_key=request.session.session_key or '',
             )
 
-            successful_files = []
-            for file_obj in files:
-                filename = file_obj.name.lower()
-                if filename.endswith('.pdf'):
-                    file_type = 'pdf'
-                    extracted_text = extract_text_from_pdf(file_obj)
-                elif filename.endswith('.docx'):
-                    file_type = 'docx'
-                    extracted_text = extract_text_from_docx(file_obj)
-                else:
-                    continue
+            try:
+                successful_files = []
+                for file_obj in files:
+                    filename = file_obj.name.lower()
+                    if filename.endswith('.pdf'):
+                        file_type = 'pdf'
+                        extracted_text = extract_text_from_pdf(file_obj)
+                    elif filename.endswith('.docx'):
+                        file_type = 'docx'
+                        extracted_text = extract_text_from_docx(file_obj)
+                    else:
+                        continue
 
-                if not extracted_text or not extracted_text.strip():
-                    continue
+                    if not extracted_text or not extracted_text.strip():
+                        continue
 
-                uploaded_file = UploadedFile.objects.create(
-                    upload_session=upload_session,
-                    chapter=chapter,
-                    file=file_obj,
-                    file_type=file_type,
-                    extracted_text=extracted_text,
+                    uploaded_file = UploadedFile.objects.create(
+                        upload_session=upload_session,
+                        chapter=chapter,
+                        file=file_obj,
+                        file_type=file_type,
+                        extracted_text=extracted_text,
+                    )
+                    ingest_uploaded_file_chunks(uploaded_file)
+                    successful_files.append(uploaded_file)
+
+                if not successful_files:
+                    upload_session.delete()
+                    messages.error(request, "Could not extract text from the uploaded files. Please try different files.")
+                    return render(request, 'quiz/home.html', {'form': form})
+
+                context_bundle = retrieve_context_for_session(upload_session, mode='summary')
+                upload_session.summary = generate_summary(
+                    context_bundle['context_text'],
+                    chapter.title if chapter else 'Fundamentals of Programming',
+                    cross_reference_notes=context_bundle['cross_reference_notes'],
                 )
-                ingest_uploaded_file_chunks(uploaded_file)
-                successful_files.append(uploaded_file)
+                upload_session.save(update_fields=['summary'])
 
-            if not successful_files:
+            except Exception as e:
                 upload_session.delete()
-                messages.error(request, "Could not extract text from the uploaded files. Please try different files.")
+                messages.error(request, f"Error during processing: {e}")
                 return render(request, 'quiz/home.html', {'form': form})
-
-            context_bundle = retrieve_context_for_session(upload_session, mode='summary')
-            upload_session.summary = generate_summary(
-                context_bundle['context_text'],
-                chapter.title if chapter else 'Fundamentals of Programming',
-                cross_reference_notes=context_bundle['cross_reference_notes'],
-            )
-            upload_session.save(update_fields=['summary'])
 
             return redirect('study_summary', upload_session_id=upload_session.id)
 

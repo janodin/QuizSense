@@ -1,10 +1,5 @@
 """
-AI service for QuizSense using MiniMax API.
-Responsibilities:
-  1. generate_mcq_questions(text, chapter_title) -> list of 10 parsed MCQ dicts
-  2. generate_recommendations(attempt, results)  -> plain-text AI advice string
-  3. generate_summary(text, chapter_title)      -> study summary
-  4. embed_texts(texts)                          -> list of vectors (1536d)
+AI service for QuizSense using MiniMax V2 API (OpenAI Compatible).
 """
 
 import json
@@ -13,25 +8,40 @@ import re
 import requests
 from django.conf import settings
 
-# MiniMax Models
+# MiniMax V2 Models (OpenAI Compatible)
 CHAT_MODEL = "abab6.5s-chat"
-EMBEDDING_MODEL = "embo-01"
+EMBEDDING_MODEL = "embo-01" # Or 'extraction-601' for V2
 
 logger = logging.getLogger(__name__)
 
-def _make_minimax_request(endpoint, payload):
+def _make_minimax_v2_request(endpoint, payload):
+    # V2 uses the /v2/ prefix and OpenAI compatible structure
     url = f"https://api.minimax.chat/v1/{endpoint}"
+    
     headers = {
         "Authorization": f"Bearer {settings.MINIMAX_API_KEY}",
         "Content-Type": "application/json"
     }
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        logger.error(f"MiniMax API Error: {e}")
-        raise ValueError(f"MiniMax API call failed: {e}")
+    
+    # For V2/OpenAI style, some endpoints might differ. 
+    # Chat: /v1/chat/completions
+    # Embed: /v1/embeddings
+    
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    
+    if response.status_code != 200:
+        try:
+            error_data = response.json()
+            # MiniMax V2 often returns error in 'error' field
+            msg = error_data.get('error', {}).get('message', response.text)
+            error_msg = f"MiniMax V2 Error: {msg}"
+        except:
+            error_msg = f"MiniMax V1/V2 HTTP {response.status_code}: {response.text}"
+        
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    return response.json()
 
 def embed_texts(texts):
     """
@@ -40,19 +50,27 @@ def embed_texts(texts):
     if not texts:
         return []
     
-    payload = {
-        "model": EMBEDDING_MODEL,
-        "texts": texts,
-        "type": "db" # 'db' for storage, 'query' for search. Service uses it for both for simplicity.
-    }
+    all_vectors = []
+    batch_size = 10 
     
-    try:
-        data = _make_minimax_request("embeddings", payload)
-        # MiniMax returns data['vectors']
-        return data.get("vectors", [])
-    except Exception as exc:
-        logger.error(f"MiniMax embedding failed: {exc}")
-        raise ValueError(f"MiniMax embedding failed: {exc}")
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        payload = {
+            "model": EMBEDDING_MODEL,
+            "input": batch, # V2 uses 'input' instead of 'texts'
+        }
+        # Note: If this still fails with 2049, your key might require the 'base_resp' check removed 
+        # or a different base URL. But 'sk-cp-' usually works with standard OpenAI-style V1 paths.
+        data = _make_minimax_v2_request("embeddings", payload)
+        
+        # OpenAI style returns data['data'][i]['embedding']
+        if "data" in data:
+            vectors = [item["embedding"] for item in data["data"]]
+            all_vectors.extend(vectors)
+        elif "vectors" in data: # Fallback for some MiniMax configurations
+            all_vectors.extend(data["vectors"])
+    
+    return all_vectors
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -60,64 +78,35 @@ def embed_texts(texts):
 
 SUMMARY_PROMPT_TEMPLATE = (
     "You are an expert programming instructor. Based on the retrieved context below, "
-    "create a concise study summary to help a student prepare for a quiz.\n\n"
-    "FORMAT:\n"
-    "- Start each main topic with ## Topic Name\n"
-    "- Use bullet points (- ) for key facts and definitions\n"
-    "- Keep it focused and under 600 words\n"
-    "- Plain text with ## headings and - bullets only\n\n"
+    "create a concise study summary.\n\n"
     "Chapter: {chapter_title}\n\n"
     "Retrieved Context:\n{text}\n\n"
     "Write the study summary now:"
 )
 
 MCQ_PROMPT_TEMPLATE = (
-    "You are an expert programming instructor. Based on the retrieved context below, "
-    "generate exactly 10 multiple-choice questions to test a student's understanding.\n\n"
-    "RULES:\n"
-    "- Each question must have exactly 4 answer choices labeled A, B, C, D.\n"
-    "- Only ONE choice must be the correct answer.\n"
-    "- The correct answer must be factually accurate based on the text.\n"
-    "- IMPORTANT: Return ONLY a valid JSON array with NO markdown, NO explanation, NO code fences.\n\n"
+    "You are an expert programming instructor. Generate exactly 10 MCQs as a JSON array.\n\n"
     "Chapter: {chapter_title}\n\n"
     "Retrieved Context:\n{text}\n\n"
-    "Required JSON format:\n"
-    '[{{"question": "...?", "choices": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, '
-    '"correct_answer": "A", "topic": "Brief topic"}}]'
-)
-
-RECOMMENDATION_PROMPT_TEMPLATE = (
-    "You are a helpful programming tutor. A student just completed a quiz on \"{chapter_title}\".\n\n"
-    "Results:\n{results_text}\n\n"
-    "Score: {score}/{total} ({percentage}%)\n\n"
-    "Provide actionable feedback in bullet points using HTML <ul><li> tags.\n"
-    "No introduction or conclusion."
+    "Return ONLY a valid JSON array. Each object: {\"question\", \"choices\":{\"A\",\"B\",\"C\",\"D\"}, \"correct_answer\", \"topic\"}"
 )
 
 def _chat_completion(prompt):
     payload = {
         "model": CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "tokens_to_generate": 2048,
     }
-    data = _make_minimax_request("chat/completions", payload)
-    # MiniMax V1 response structure
+    data = _make_minimax_v2_request("chat/completions", payload)
     if "choices" in data:
         return data["choices"][0]["message"]["content"]
     return ""
 
 def generate_summary(text, chapter_title="Programming Fundamentals", cross_reference_notes=""):
-    prompt = SUMMARY_PROMPT_TEMPLATE.format(
-        chapter_title=chapter_title,
-        text=text[:8000]
-    )
+    prompt = SUMMARY_PROMPT_TEMPLATE.format(chapter_title=chapter_title, text=text[:6000])
     return _chat_completion(prompt)
 
 def generate_mcq_questions(text, chapter_title="Programming Fundamentals", cross_reference_notes=""):
-    prompt = MCQ_PROMPT_TEMPLATE.format(
-        chapter_title=chapter_title,
-        text=text[:8000]
-    )
+    prompt = MCQ_PROMPT_TEMPLATE.format(chapter_title=chapter_title, text=text[:6000])
     raw = _chat_completion(prompt)
     return _parse_mcq_response(raw)
 
@@ -126,26 +115,15 @@ def _parse_mcq_response(raw):
     start = cleaned.find("[")
     end = cleaned.rfind("]")
     if start == -1 or end == -1:
-        raise ValueError("MiniMax response did not contain a JSON array.")
+        raise ValueError(f"AI Response parsing failed. Raw starts with: {raw[:50]}")
     
-    questions = json.loads(cleaned[start:end + 1])
-    validated = []
-    for q in questions:
-        if all(k in q for k in ("question", "choices", "correct_answer")):
-            validated.append(q)
-            if len(validated) == 10: break
-    return validated
+    try:
+        questions = json.loads(cleaned[start:end + 1])
+        return questions[:10]
+    except Exception as e:
+        raise ValueError(f"JSON Parse Error: {e}")
 
 def generate_recommendations(quiz_attempt, questions_with_answers):
     chapter_title = quiz_attempt.quiz.chapter.title if quiz_attempt.quiz.chapter else "Fundamentals"
-    lines = [f"Q{i}: {'Correct' if item['is_correct'] else 'Wrong'} - Topic: {item.get('topic')}" 
-             for i, item in enumerate(questions_with_answers, 1)]
-    
-    prompt = RECOMMENDATION_PROMPT_TEMPLATE.format(
-        chapter_title=chapter_title,
-        results_text="\n".join(lines),
-        score=quiz_attempt.score,
-        total=quiz_attempt.total_questions,
-        percentage=quiz_attempt.score_percentage()
-    )
+    prompt = f"Provide 3 feedback points for a student who scored {quiz_attempt.score}/{quiz_attempt.total_questions} on {chapter_title}."
     return _chat_completion(prompt)
