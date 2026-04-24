@@ -32,8 +32,17 @@ DEBUG = os.getenv("DEBUG", "1").lower() in ("1", "true", "yes", "on")
 
 allowed_hosts_env = os.getenv("ALLOWED_HOSTS", "")
 ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_env.split(",") if host.strip()]
-if not ALLOWED_HOSTS and DEBUG:
-    ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+
+# Add Render default hostnames
+render_external_hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+if render_external_hostname:
+    ALLOWED_HOSTS.append(render_external_hostname)
+
+if not ALLOWED_HOSTS:
+    if DEBUG:
+        ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+    else:
+        ALLOWED_HOSTS = [".onrender.com"] # Fallback for production
 
 
 # Application definition
