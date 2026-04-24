@@ -13,6 +13,9 @@ def ingest_uploaded_file_chunks(uploaded_file):
         return 0
 
     embeddings = embed_texts(chunks)
+    if len(embeddings) != len(chunks):
+        raise ValueError(f"Embedding mismatch: expected {len(chunks)}, got {len(embeddings)}.")
+
     chunk_objects = [
         UploadedChunk(
             upload_session=uploaded_file.upload_session,
@@ -62,7 +65,10 @@ def retrieve_context_for_session(upload_session, mode='quiz', quiz_top_k=8, summ
             'textbook_chunks': [],
         }
 
-    query_embedding = embed_texts([query_text[:6000]])[0]
+    embeddings = embed_texts([query_text[:6000]])
+    if not embeddings:
+        raise ValueError("AI embedding service failed to return vectors.")
+    query_embedding = embeddings[0]
 
     if mode == 'summary':
         session_k = 7
