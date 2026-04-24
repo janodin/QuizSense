@@ -15,11 +15,33 @@ from django.conf import settings
 
 
 MODEL = "gemini-3.1-flash-lite-preview"
+EMBEDDING_MODEL = "text-embedding-004"
 logger = logging.getLogger(__name__)
 
 
 def _get_client():
     return genai.Client(api_key=settings.GEMINI_API_KEY)
+
+
+def embed_texts(texts):
+    """
+    Generate embeddings using Gemini API instead of local model.
+    Returns a list of vectors.
+    """
+    if not texts:
+        return []
+    
+    client = _get_client()
+    try:
+        # Gemini embedding API supports batching
+        response = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=texts,
+        )
+        return [item.values for item in response.embeddings]
+    except Exception as exc:
+        logger.error(f"Gemini embedding failed: {exc}")
+        raise ValueError(f"Gemini embedding failed: {exc}")
 
 
 def _log_usage(operation_name, response):
