@@ -32,16 +32,23 @@ def _make_minimax_v2_request(endpoint, payload):
     if response.status_code != 200:
         try:
             error_data = response.json()
-            # MiniMax V2 often returns error in 'error' field
             msg = error_data.get('error', {}).get('message', response.text)
-            error_msg = f"MiniMax V2 Error: {msg}"
+            error_msg = f"MiniMax API Error: {msg}"
         except:
-            error_msg = f"MiniMax V1/V2 HTTP {response.status_code}: {response.text}"
+            error_msg = f"MiniMax HTTP {response.status_code}: {response.text}"
         
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    return response.json()
+    data = response.json()
+
+    # Check for MiniMax specific 'base_resp' error even on 200 OK
+    if "base_resp" in data and data["base_resp"].get("status_code") != 0:
+        error_msg = f"MiniMax Logic Error {data['base_resp'].get('status_code')}: {data['base_resp'].get('status_msg')}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    return data
 
 def embed_texts(texts):
     """
