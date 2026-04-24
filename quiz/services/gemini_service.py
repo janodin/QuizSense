@@ -15,7 +15,7 @@ from django.conf import settings
 
 
 MODEL = "gemini-3.1-flash-lite-preview"
-EMBEDDING_MODEL = "models/text-embedding-004"
+EMBEDDING_MODEL = "models/gemini-embedding-001"
 logger = logging.getLogger(__name__)
 
 
