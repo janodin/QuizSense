@@ -1,10 +1,10 @@
-from . import gemini_service
+from . import minimax_service
 
 def embed_texts(texts):
     """
-    Generate embeddings using Gemini API via gemini_service.
+    Generate embeddings using MiniMax API via minimax_service.
     """
     if not texts:
         return []
 
-    return gemini_service.embed_texts(texts)
+    return minimax_service.embed_texts(texts)

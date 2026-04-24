@@ -4,7 +4,7 @@ from django.utils import timezone
 from .models import Chapter, Topic, UploadSession, UploadedFile, Question, Quiz, QuizAttempt, QuizAnswer
 from .forms import MultiFileUploadForm
 from .services.file_processor import extract_text_from_pdf, extract_text_from_docx
-from .services.gemini_service import generate_mcq_questions, generate_summary
+from .services.minimax_service import generate_mcq_questions, generate_summary
 from .services.rag_service import ingest_uploaded_file_chunks, retrieve_context_for_session
 
 
@@ -254,7 +254,7 @@ def submit_quiz(request, quiz_id):
     
     # Generate AI recommendations
     try:
-        from .services.gemini_service import generate_recommendations
+        from .services.minimax_service import generate_recommendations
         recommendation = generate_recommendations(attempt, questions_with_answers)
         attempt.ai_recommendation = recommendation
         attempt.save()
