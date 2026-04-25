@@ -1,6 +1,6 @@
 """
 Embedding service for QuizSense using sentence-transformers.
-Model: all-MiniLM-L6-v2 (384 dimensions) — fast, accurate, runs locally.
+Model: paraphrase-MiniLM-L3-v2 (384 dimensions) — tiny, fast, low RAM, runs locally.
 """
 
 import logging
@@ -19,15 +19,15 @@ def _get_model():
     global _transformer_model
     if _transformer_model is None:
         from sentence_transformers import SentenceTransformer
-        # all-MiniLM-L6-v2: 384 dimensions, fast and accurate for academic text
-        _transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
-        logger.info("sentence-transformers model loaded: all-MiniLM-L6-v2")
+        # paraphrase-MiniLM-L3-v2: 384 dimensions, tiny model, low RAM
+        _transformer_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
+        logger.info("sentence-transformers model loaded: paraphrase-MiniLM-L3-v2")
     return _transformer_model
 
 
 def embed_texts(texts):
     """
-    Generate embeddings using sentence-transformers/all-MiniLM-L6-v2.
+    Generate embeddings using sentence-transformers/paraphrase-MiniLM-L3-v2.
     Returns list of 384-dim float lists.
     """
     if not texts:

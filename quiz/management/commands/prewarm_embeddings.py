@@ -16,7 +16,7 @@ class Command(BaseCommand):
     help = "Pre-warm the sentence-transformers embedding model"
 
     def handle(self, *args, **options):
-        self.stdout.write("Loading sentence-transformers model (all-MiniLM-L6-v2)...")
+        self.stdout.write("Loading sentence-transformers model (paraphrase-MiniLM-L3-v2)...")
         start = time.time()
         model = _get_model()
         elapsed = time.time() - start
