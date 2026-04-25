@@ -11,24 +11,15 @@ distro==1.9.0
 Django==6.0.3
 dj-database-url==2.2.0
 django-crispy-forms==2.6
-google-ai-generativelanguage==0.6.15
-google-api-core==2.30.0
-google-api-python-client==2.192.0
-google-auth==2.49.0
-google-auth-httplib2==0.3.0
-google-genai==1.66.0
-google-generativeai==0.8.6
-googleapis-common-protos==1.73.0
-grpcio==1.78.0
-grpcio-status==1.71.2
-h11==0.16.0
 gunicorn==23.0.0
+h11==0.16.0
 httpcore==1.0.9
 httplib2==0.31.2
 httpx==0.28.1
 idna==3.11
 lxml==6.0.2
 packaging==26.0
+pdf2image==1.18.0
 pillow==12.1.1
 pgvector==0.4.1
 proto-plus==1.27.1
@@ -57,3 +48,20 @@ uritemplate==4.2.0
 urllib3==2.6.3
 websockets==16.0
 whitenoise==6.8.2
+
+# sentence-transformers: local embeddings (all-MiniLM-L6-v2, 384 dims)
+sentence-transformers>=2.7.0
+# torch is required by sentence-transformers (CPU version — no GPU needed)
+torch>=2.0.0
+# ----------------------------------------------------------------------
+# For OCR (scanned PDFs), you must also install system-wide:
+#   - poppler-utils   (Ubuntu/Debian: sudo apt install poppler-utils)
+#   - tesseract-ocr  (Ubuntu/Debian: sudo apt install tesseract-ocr)
+#   - On Windows: install poppler from https://github.com/oschwartz10612/poppler-windows
+#     and tesseract from https://github.com/UB-Mannheim/tesseract/wiki
+#
+# NOTE: This project uses MiniMax API (minimaxi.chat), NOT Google Gemini.
+#       The following packages were removed as they are unused:
+#       google-ai-generativelanguage, google-api-core, google-api-python-client,
+#       google-auth, google-auth-httplib2, google-genai, google-generativeai,
+#       googleapis-common-protos, grpcio, grpcio-status
