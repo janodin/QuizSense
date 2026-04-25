@@ -55,7 +55,6 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "pgvector.django",
     "crispy_forms",
     "crispy_bootstrap5",
     "quiz",
