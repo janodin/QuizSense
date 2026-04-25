@@ -1,4 +1,5 @@
 from django.shortcuts import render, redirect, get_object_or_404
+from django.http import HttpResponseForbidden
 from django.contrib import messages
 from django.utils import timezone
 from .models import Chapter, Topic, UploadSession, UploadedFile, Question, Quiz, QuizAttempt, QuizAnswer
@@ -6,6 +7,55 @@ from .forms import MultiFileUploadForm
 from .services.file_processor import extract_text_from_pdf, extract_text_from_docx
 from .services.minimax_service import generate_mcq_questions, generate_summary
 from .services.rag_service import ingest_uploaded_file_chunks, retrieve_context_for_session
+
+
+def _get_session_key(request):
+    """Return the current session key, creating one if needed."""
+    if not request.session.session_key:
+        request.session.create()
+    return request.session.session_key
+
+
+def _check_ownership(request, obj, owner_field='session_key'):
+    """
+    Verify the current session owns the object.
+    Returns True if owned, False otherwise.
+    """
+    owner_value = getattr(obj, owner_field, None)
+    current_key = _get_session_key(request)
+    return owner_value == current_key
+
+
+def _normalize_topic(title):
+    """Normalize a topic title for fuzzy matching — lowercase, strip punctuation."""
+    import re
+    return re.sub(r'[^a-z0-9\s]', '', title.lower()).strip()
+
+
+def _find_topic_for_chapter(chapter, ai_topic_name):
+    """
+    Map an AI-generated topic name to an existing seeded Topic for this chapter.
+    Falls back to creating a new topic only when no reasonable match exists.
+    """
+    if not ai_topic_name:
+        return None
+
+    normalized_ai = _normalize_topic(ai_topic_name)
+
+    # 1. Exact match (case-insensitive)
+    existing = list(Topic.objects.filter(chapter=chapter))
+    for t in existing:
+        if _normalize_topic(t.title) == normalized_ai:
+            return t
+
+    # 2. Substring match — AI topic contains existing title or vice versa
+    for t in existing:
+        norm_title = _normalize_topic(t.title)
+        if norm_title and (norm_title in normalized_ai or normalized_ai in norm_title):
+            return t
+
+    # 3. No match found — create a new topic (last resort)
+    return Topic.objects.create(chapter=chapter, title=ai_topic_name)
 
 
 def home(request):
@@ -65,6 +115,9 @@ def home(request):
                 upload_session.save(update_fields=['summary'])
 
             except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.exception("Upload session processing failed")
                 upload_session.delete()
                 messages.error(request, f"Error during processing: {e}")
                 return render(request, 'quiz/home.html', {'form': form})
@@ -76,6 +129,8 @@ def home(request):
 
 def study_summary(request, upload_session_id):
     upload_session = get_object_or_404(UploadSession, id=upload_session_id)
+    if not _check_ownership(request, upload_session):
+        return HttpResponseForbidden("You do not have access to this study summary.")
     session_files = upload_session.files.order_by('uploaded_at')
     
     # Calculate text quality indicators for each file
@@ -155,6 +210,8 @@ def study_summary(request, upload_session_id):
 
 def generate_quiz(request, upload_session_id):
     upload_session = get_object_or_404(UploadSession, id=upload_session_id)
+    if not _check_ownership(request, upload_session):
+        return HttpResponseForbidden("You do not have access to this upload session.")
     chapter = upload_session.chapter
     if not chapter:
         messages.error(request, "No chapter was associated with this upload session.")
@@ -190,7 +247,7 @@ def generate_quiz(request, upload_session_id):
     )
 
     for mcq in mcq_list:
-        topic, _ = Topic.objects.get_or_create(chapter=chapter, title=mcq['topic'])
+        topic = _find_topic_for_chapter(chapter, mcq.get('topic', ''))
         question = Question.objects.create(
             chapter=chapter,
             topic=topic,
@@ -209,34 +266,53 @@ def generate_quiz(request, upload_session_id):
 
 def take_quiz(request, quiz_id):
     quiz = get_object_or_404(Quiz, id=quiz_id)
+    if quiz.upload_session and not _check_ownership(request, quiz.upload_session):
+        return HttpResponseForbidden("You do not have access to this quiz.")
     questions = list(quiz.questions.all())
     return render(request, 'quiz/take_quiz.html', {'quiz': quiz, 'questions': questions})
-
 
 def submit_quiz(request, quiz_id):
     if request.method != 'POST':
         return redirect('take_quiz', quiz_id=quiz_id)
 
     quiz = get_object_or_404(Quiz, id=quiz_id)
+    if quiz.upload_session and not _check_ownership(request, quiz.upload_session):
+        return HttpResponseForbidden("You do not have access to this quiz.")
     questions = list(quiz.questions.all())
 
     if not request.session.session_key:
         request.session.create()
 
+    valid_choices = {'A', 'B', 'C', 'D'}
+
+    # Collect and validate all answers before creating the attempt
+    unanswered = []
+    validated_answers = []
+    for question in questions:
+        selected = request.POST.get(f'q_{question.id}', '').strip().upper()
+        if selected not in valid_choices:
+            unanswered.append(question.id)
+        validated_answers.append((question, selected))
+
+    if unanswered:
+        messages.error(
+            request,
+            f"Please answer all questions before submitting. "
+            f"Missing answers for {len(unanswered)} question(s)."
+        )
+        return redirect('take_quiz', quiz_id=quiz_id)
+
+    # All answers present — create the attempt
     attempt = QuizAttempt.objects.create(
         quiz=quiz,
         session_key=request.session.session_key or '',
         total_questions=len(questions),
     )
 
-    valid_choices = {'A', 'B', 'C', 'D'}
     score = 0
     questions_with_answers = []
-    
-    for question in questions:
-        selected = request.POST.get(f'q_{question.id}', '').strip().upper()
-        if selected not in valid_choices:
-            selected = 'A'
+
+    for question, selected in validated_answers:
         is_correct = selected == question.correct_answer
         if is_correct:
             score += 1
@@ -246,7 +322,6 @@ def submit_quiz(request, quiz_id):
             selected_answer=selected,
             is_correct=is_correct,
         )
-        
         questions_with_answers.append({
             'question_text': question.text,
             'correct_answer': question.correct_answer,
@@ -257,15 +332,21 @@ def submit_quiz(request, quiz_id):
 
     attempt.score = score
     attempt.completed_at = timezone.now()
-    
+
     # Generate AI recommendations
     try:
         from .services.minimax_service import generate_recommendations
         recommendation = generate_recommendations(attempt, questions_with_answers)
         attempt.ai_recommendation = recommendation
         attempt.save()
-    except Exception as e:
-        messages.warning(request, f"Quiz submitted successfully, but study recommendations could not be generated: {e}")
+    except Exception:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"AI recommendation generation failed for attempt {attempt.id}: {e}")
+        messages.warning(
+            request,
+            "Quiz submitted successfully, but study recommendations could not be generated."
+        )
         attempt.save()
         return redirect('quiz_results', attempt_id=attempt.id)
 
@@ -274,6 +355,8 @@ def submit_quiz(request, quiz_id):
 
 def quiz_results(request, attempt_id):
     attempt = get_object_or_404(QuizAttempt, id=attempt_id)
+    if not _check_ownership(request, attempt):
+        return HttpResponseForbidden("You do not have access to these results.")
     incorrect = attempt.total_questions - attempt.score
     
     # Calculate topic-wise performance
@@ -305,6 +388,8 @@ def quiz_results(request, attempt_id):
 
 def review_quiz(request, attempt_id):
     attempt = get_object_or_404(QuizAttempt, id=attempt_id)
+    if not _check_ownership(request, attempt):
+        return HttpResponseForbidden("You do not have access to this review.")
     answers = attempt.answers.select_related('question').order_by('id')
     return render(request, 'quiz/review.html', {'attempt': attempt, 'answers': answers})
 
@@ -312,6 +397,8 @@ def review_quiz(request, attempt_id):
 def quiz_insights(request, attempt_id):
     """Display detailed insights and recommendations for a quiz attempt."""
     attempt = get_object_or_404(QuizAttempt, id=attempt_id)
+    if not _check_ownership(request, attempt):
+        return HttpResponseForbidden("You do not have access to these insights.")
     answers = attempt.answers.select_related('question', 'question__topic', 'question__chapter').all()
     
     # Topic-wise performance analysis

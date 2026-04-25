@@ -1,13 +1,13 @@
 # Deploying QuizSense to Render
 
-This guide walks you through deploying the QuizSense Django app (with PostgreSQL, pgvector, Gemini API) to Render using the free plan.
+This guide walks you through deploying the QuizSense Django app (with PostgreSQL, pgvector, MiniMax API) to Render using the free plan.
 
 ---
 
 ## 1. Prerequisites
 - GitHub repository with all code and `render.yaml` in root
 - Render account (https://dashboard.render.com)
-- Your Gemini API key (for quiz/summary generation)
+- Your MiniMax API key (for quiz/summary generation) — get one at https://www.minimaxi.chat
 
 ---
 
@@ -24,47 +24,92 @@ This guide walks you through deploying the QuizSense Django app (with PostgreSQL
 ## 3. Set Environment Variables
 - Go to **quizsense-web** service in Render
 - Click **Environment**
-- Add your `GEMINI_API_KEY` (from Google Gemini)
+- Add your `MINIMAX_API_KEY` (from MiniMax)
 - Click **Save Changes**
 - Trigger a **Manual Deploy**
 
 ---
 
-## 4. Verify Deployment
-- Visit your Render web service URL (e.g., `https://quizsense-web.onrender.com`)
-- Upload a file, generate summary, take quiz, check insights
+## 4. Post-Deployment: Ingest Textbooks (Important!)
+
+The startup command runs migrations and seeds chapters/topics, but **textbook RAG ingestion must be done separately** the first time you deploy (or after a database reset).
+
+This populates the `TextbookChunk` table with embedded textbook content for the RAG pipeline.
+
+### Option A: Via Render SSH (easiest for one-time setup)
+1. Go to your **quizsense-web** service → Shell
+2. Run:
+   ```bash
+   python manage.py ingest_all_textbooks --reset
+   ```
+   This ingests all PDFs from the `dataset/` folder with proper chapter mapping.
+3. Verify: Run `python manage.py shell` then:
+   ```python
+   from quiz.models import TextbookChunk
+   from django.db.models import Count
+   print(TextbookChunk.objects.values('chapter__number').annotate(c=Count('id')))
+   ```
+
+### Option B: Via a management command script (scheduled re-ingestion)
+To re-ingest textbooks automatically on each deploy, add to `render.yaml` `startCommand`:
+```bash
+python manage.py ingest_all_textbooks && gunicorn ...
+```
+But note this will re-ingest every deploy, so prefer Option A for the initial setup.
 
 ---
 
-## 5. CLI Deployment (Alternative)
+## 5. Verify Deployment
+- Visit your Render web service URL (e.g., `https://quizsense-web.onrender.com`)
+- Upload a PDF or DOCX file, generate a summary, take a quiz, check insights
+- If textbook chunks were ingested, cross-reference notes will appear in AI responses
+
+---
+
+## 6. CLI Deployment (Alternative)
 1. Install Render CLI:
    ```powershell
    npm i -g @renderinc/cli
    render login
    render blueprint apply -f render.yaml
    ```
-2. Set `GEMINI_API_KEY` in dashboard as above
+2. Set `MINIMAX_API_KEY` in dashboard as above
 
 ---
 
-## 6. Notes
+## 7. Notes
 - PostgreSQL and pgvector are auto-provisioned (free tier)
+- PostgreSQL major version 16 is used (pgvector compatibility)
 - Static/media files are handled by WhiteNoise
 - All production settings are pre-configured
 - If you see errors, check **Logs** in Render dashboard
+- The `dataset/` folder with textbook PDFs must be committed to GitHub for ingestion to work
 
 ---
 
-## 7. Troubleshooting
-- **Gemini errors:** Check API key and usage limits
+## 8. Troubleshooting
+- **MiniMax API errors:** Check API key and usage limits at minimaxi.chat
+- **No cross-reference notes in AI responses:** Run `ingest_all_textbooks` to populate TextbookChunk table
 - **Database errors:** Confirm PostgreSQL is running and `DATABASE_URL` is set
 - **Static files:** Run `python manage.py collectstatic` if needed
+- **OCR not working:** Scanned PDFs require poppler + tesseract-ocr system packages (not available on Render free tier — OCR will be silently skipped)
 
 ---
 
-## 8. Useful Links
+## 9. System Dependencies for OCR
+
+Render's free tier does **not** include system packages for OCR. If you need scanned PDF support:
+- Install poppler and tesseract-ocr via a **custom build script** (Render paid plans only)
+- On the free tier, scanned/image PDFs will fall back to empty text extraction
+- Text-based PDFs work fine without OCR
+
+---
+
+## 10. Useful Links
 - [Render Docs](https://render.com/docs/blueprint-spec)
-- [Google Gemini API](https://aistudio.google.com/app/apikey)
+- [MiniMax API](https://www.minimaxi.chat)
+- [pgvector Django](https://github.com/jp Professionals/django-pgvector)
+- [QuizSense GitHub](https://github.com/outsourc-e/hermes-workspace) — if applicable
 
 ---
 

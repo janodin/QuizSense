@@ -1,10 +1,22 @@
 from collections import Counter
+from typing import List
 
-from pgvector.django import CosineDistance
+import numpy as np
 
 from ..models import TextbookChunk, UploadedChunk
 from .chunking_service import split_text_into_chunks
 from .embedding_service import embed_texts
+
+
+def _cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Compute cosine similarity between two embedding vectors."""
+    a = np.array(a, dtype=np.float32)
+    b = np.array(b, dtype=np.float32)
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
 
 
 def ingest_uploaded_file_chunks(uploaded_file):
@@ -79,16 +91,30 @@ def retrieve_context_for_session(upload_session, mode='quiz', quiz_top_k=8, summ
         textbook_k = 3
         top_k = quiz_top_k
 
-    session_queryset = UploadedChunk.objects.filter(upload_session=upload_session).annotate(
-        distance=CosineDistance('embedding', query_embedding)
-    ).order_by('distance')[: max(top_k, session_k)]
+    # Fetch all session chunks and rank by cosine similarity
+    all_session_chunks = list(
+        UploadedChunk.objects.filter(upload_session=upload_session).only('id', 'content', 'embedding')
+    )
+    session_chunk_ids = [(c.id, c) for c in all_session_chunks if c.embedding]
+    scored = sorted(
+        [(c[0], _cosine_similarity(query_embedding, c[1].embedding), c[1]) for c in session_chunk_ids],
+        key=lambda x: x[1], reverse=True
+    )
+    session_chunks = [x[2] for x in scored[:max(top_k, session_k)]]
 
-    textbook_queryset = TextbookChunk.objects.filter(chapter=upload_session.chapter).annotate(
-        distance=CosineDistance('embedding', query_embedding)
-    ).order_by('distance')[: max(top_k, textbook_k)]
+    # Fetch all textbook chunks for this chapter and rank by cosine similarity
+    all_textbook_chunks = list(
+        TextbookChunk.objects.filter(chapter=upload_session.chapter).only('id', 'content', 'embedding', 'topic')
+    )
+    textbook_chunk_ids = [(c.id, c) for c in all_textbook_chunks if c.embedding]
+    scored_tb = sorted(
+        [(c[0], _cosine_similarity(query_embedding, c[1].embedding), c[1]) for c in textbook_chunk_ids],
+        key=lambda x: x[1], reverse=True
+    )
+    textbook_chunks = [x[2] for x in scored_tb[:max(top_k, textbook_k)]]
 
-    session_chunks = list(session_queryset)[:session_k]
-    textbook_chunks = list(textbook_queryset)[:textbook_k]
+    session_chunks = session_chunks[:session_k]
+    textbook_chunks = textbook_chunks[:textbook_k]
 
     context_lines = [
         '[Session Upload Context]',

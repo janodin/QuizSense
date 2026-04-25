@@ -1,5 +1,27 @@
 from django.db import models
-from pgvector.django import VectorField
+
+import json
+
+
+class VectorEmbedding(models.TextField):
+    """Store a 384-dim embedding as JSON text. Works with SQLite + numpy or PostgreSQL + pgvector."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def from_db_value(self, value, expression, connection):
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return value
+        return json.loads(value)
+
+    def get_prep_value(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return json.dumps(value)
 
 
 class Chapter(models.Model):
@@ -130,7 +152,7 @@ class TextbookChunk(models.Model):
     source_title = models.CharField(max_length=255)
     chunk_index = models.PositiveIntegerField()
     content = models.TextField()
-    embedding = VectorField(dimensions=1536)
+    embedding = VectorEmbedding()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -146,7 +168,7 @@ class UploadedChunk(models.Model):
     chapter = models.ForeignKey(Chapter, on_delete=models.CASCADE, related_name='uploaded_chunks')
     chunk_index = models.PositiveIntegerField()
     content = models.TextField()
-    embedding = VectorField(dimensions=1536)
+    embedding = VectorEmbedding()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

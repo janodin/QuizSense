@@ -31,4 +31,8 @@ services:
         value: "https://*.onrender.com"
       - key: MINIMAX_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+        # NOTE: GEMINI_API_KEY is deprecated — the app now uses MINIMAX_API_KEY above.
+        # Remove this line after verifying MINIMAX is working in production.
 

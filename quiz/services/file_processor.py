@@ -3,13 +3,17 @@ File processing service for QuizSense.
 Handles text extraction from PDF and Word files using:
   - PyPDF2 for standard PDFs (file parsing)
   - python-docx for Word documents (file parsing)
-  - pytesseract + Pillow for scanned/image-based PDFs (OCR)
+  - pytesseract + Pillow + pdf2image for scanned/image-based PDFs (OCR)
 """
 
-import PyPDF2
+import logging
+
 import docx
 import pytesseract
+import PyPDF2
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 def extract_text_from_pdf(file_obj):
@@ -49,8 +53,8 @@ def _parse_pdf(file_obj):
             page_text = page.extract_text()
             if page_text:
                 text_parts.append(page_text)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"PyPDF2 extraction failed: {e}")
     return "\n".join(text_parts)
 
 
@@ -58,8 +62,8 @@ def _ocr_pdf(file_obj):
     """
     OCR-based text extraction for scanned/image PDFs.
     Converts each page to an image and runs pytesseract on it.
-    Requires pdf2image and poppler to be installed on the system.
-    Falls back gracefully if pdf2image is not available.
+    Requires pdf2image, poppler, and tesseract-ocr to be installed on the system.
+    Logs failures instead of silently ignoring them.
     """
     text_parts = []
     try:
@@ -70,9 +74,11 @@ def _ocr_pdf(file_obj):
             page_text = pytesseract.image_to_string(image)
             if page_text.strip():
                 text_parts.append(page_text)
-    except ImportError:
-        # pdf2image not installed — return empty string gracefully
-        pass
-    except Exception:
-        pass
+    except ImportError as e:
+        logger.warning(
+            "OCR skipped — pdf2image is not installed. "
+            "Run: pip install pdf2image. Also ensure poppler and tesseract-ocr are installed system-wide."
+        )
+    except Exception as e:
+        logger.warning(f"OCR processing failed: {e}")
     return "\n".join(text_parts)

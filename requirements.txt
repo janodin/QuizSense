@@ -21,7 +21,6 @@ lxml==6.0.2
 packaging==26.0
 pdf2image==1.17.0
 pillow==12.1.1
-pgvector==0.4.1
 proto-plus==1.27.1
 protobuf==5.29.6
 psycopg2-binary==2.9.11
