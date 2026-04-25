@@ -11,7 +11,7 @@ services:
     plan: free
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: python manage.py collectstatic --noinput && python manage.py migrate quiz 0007a --fake && python manage.py migrate quiz 0007b --fake && python manage.py migrate && gunicorn quizsense.wsgi:application --workers 2 --timeout 300
+    startCommand: python manage.py collectstatic --noinput && python manage.py migrate quiz 0007a --fake && python manage.py migrate quiz 0007b --fake && python manage.py migrate && gunicorn quizsense.wsgi:application --workers 1 --timeout 300
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
