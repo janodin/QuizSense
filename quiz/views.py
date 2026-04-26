@@ -339,10 +339,10 @@ def submit_quiz(request, quiz_id):
         recommendation = generate_recommendations(attempt, questions_with_answers)
         attempt.ai_recommendation = recommendation
         attempt.save()
-    except Exception:
+    except Exception as exc:
         import logging
         logger = logging.getLogger(__name__)
-        logger.warning(f"AI recommendation generation failed for attempt {attempt.id}: {e}")
+        logger.warning(f"AI recommendation generation failed for attempt {attempt.id}: {exc}")
         messages.warning(
             request,
             "Quiz submitted successfully, but study recommendations could not be generated."
