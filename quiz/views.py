@@ -1,12 +1,12 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import HttpResponseForbidden
+from django.http import HttpResponseForbidden, JsonResponse
 from django.contrib import messages
 from django.utils import timezone
 from .models import Chapter, Topic, UploadSession, UploadedFile, Question, Quiz, QuizAttempt, QuizAnswer
 from .forms import MultiFileUploadForm
-from .services.file_processor import extract_text_from_pdf, extract_text_from_docx
-from .services.minimax_service import generate_mcq_questions, generate_summary
-from .services.rag_service import ingest_uploaded_file_chunks, retrieve_context_for_session
+from .services.minimax_service import generate_mcq_questions
+from .services.rag_service import retrieve_context_for_session
+from .services.upload_processing import start_upload_session_processing
 
 
 def _get_session_key(request):
@@ -76,43 +76,28 @@ def home(request):
             )
 
             try:
-                successful_files = []
                 for file_obj in files:
                     filename = file_obj.name.lower()
                     if filename.endswith('.pdf'):
                         file_type = 'pdf'
-                        extracted_text = extract_text_from_pdf(file_obj)
                     elif filename.endswith('.docx'):
                         file_type = 'docx'
-                        extracted_text = extract_text_from_docx(file_obj)
                     else:
                         continue
 
-                    if not extracted_text or not extracted_text.strip():
-                        continue
-
-                    uploaded_file = UploadedFile.objects.create(
+                    UploadedFile.objects.create(
                         upload_session=upload_session,
                         chapter=chapter,
                         file=file_obj,
                         file_type=file_type,
-                        extracted_text=extracted_text,
                     )
-                    ingest_uploaded_file_chunks(uploaded_file)
-                    successful_files.append(uploaded_file)
 
-                if not successful_files:
+                if not upload_session.files.exists():
                     upload_session.delete()
-                    messages.error(request, "Could not extract text from the uploaded files. Please try different files.")
+                    messages.error(request, "Please upload at least one supported PDF or DOCX file.")
                     return render(request, 'quiz/home.html', {'form': form})
 
-                context_bundle = retrieve_context_for_session(upload_session, mode='summary')
-                upload_session.summary = generate_summary(
-                    context_bundle['context_text'],
-                    chapter.title if chapter else 'Fundamentals of Programming',
-                    cross_reference_notes=context_bundle['cross_reference_notes'],
-                )
-                upload_session.save(update_fields=['summary'])
+                start_upload_session_processing(upload_session.id)
 
             except Exception as e:
                 import logging
@@ -208,10 +193,34 @@ def study_summary(request, upload_session_id):
     })
 
 
+def upload_session_status(request, upload_session_id):
+    upload_session = get_object_or_404(UploadSession, id=upload_session_id)
+    if not _check_ownership(request, upload_session):
+        return HttpResponseForbidden("You do not have access to this upload session.")
+
+    return JsonResponse({
+        'status': upload_session.processing_status,
+        'error': upload_session.processing_error,
+        'summary_ready': bool(upload_session.summary.strip()),
+    })
+
+
 def generate_quiz(request, upload_session_id):
     upload_session = get_object_or_404(UploadSession, id=upload_session_id)
     if not _check_ownership(request, upload_session):
         return HttpResponseForbidden("You do not have access to this upload session.")
+
+    if upload_session.processing_status in {UploadSession.STATUS_PENDING, UploadSession.STATUS_PROCESSING}:
+        messages.info(request, "Your files are still being processed. Please wait for the study summary to finish loading.")
+        return redirect('study_summary', upload_session_id=upload_session.id)
+
+    if upload_session.processing_status == UploadSession.STATUS_FAILED:
+        messages.error(
+            request,
+            upload_session.processing_error or "This upload session failed during processing. Please upload the files again.",
+        )
+        return redirect('study_summary', upload_session_id=upload_session.id)
+
     chapter = upload_session.chapter
     if not chapter:
         messages.error(request, "No chapter was associated with this upload session.")

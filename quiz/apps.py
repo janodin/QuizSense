@@ -16,5 +16,11 @@ class QuizConfig(AppConfig):
 
     @staticmethod
     def _prewarm_model():
-        from quiz.services.embedding_service import _get_model
-        _get_model()
+        import logging
+
+        logger = logging.getLogger(__name__)
+        try:
+            from quiz.services.embedding_service import _get_model
+            _get_model()
+        except Exception as exc:
+            logger.warning("Embedding model prewarm skipped: %s", exc)

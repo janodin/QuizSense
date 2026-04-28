@@ -37,11 +37,36 @@
                         {{ session_files|length }} file{{ session_files|length|pluralize }} in this session
                     </small>
                 </div>
-                <span class="badge bg-{{ overall_quality_class }}-subtle text-{{ overall_quality_class }} border border-{{ overall_quality_class }}-subtle">
-                    <i class="bi bi-check-circle-fill me-1"></i>{{ overall_quality_label }}
+                <span class="badge
+                    {% if upload_session.processing_status == 'completed' %}bg-{{ overall_quality_class }}-subtle text-{{ overall_quality_class }} border border-{{ overall_quality_class }}-subtle
+                    {% elif upload_session.processing_status == 'failed' %}bg-danger-subtle text-danger border border-danger-subtle
+                    {% else %}bg-warning-subtle text-warning border border-warning-subtle{% endif %}">
+                    {% if upload_session.processing_status == 'completed' %}
+                        <i class="bi bi-check-circle-fill me-1"></i>{{ overall_quality_label }}
+                    {% elif upload_session.processing_status == 'failed' %}
+                        <i class="bi bi-x-circle-fill me-1"></i>Processing failed
+                    {% else %}
+                        <i class="bi bi-hourglass-split me-1"></i>Processing
+                    {% endif %}
                 </span>
             </div>
         </div>
+
+        {% if upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
+        <div class="alert alert-info d-flex align-items-center gap-2" id="processingNotice">
+            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+            <div>
+                <strong>We’re still processing your files.</strong>
+                OCR, chunking, embeddings, and summary generation are running in the background.
+                This page will refresh automatically when the study summary is ready.
+            </div>
+        </div>
+        {% elif upload_session.processing_status == 'failed' %}
+        <div class="alert alert-danger" id="processingNotice">
+            <strong>Processing failed.</strong>
+            {{ upload_session.processing_error|default:"The upload could not be processed." }}
+        </div>
+        {% endif %}
 
         <!-- Text Quality Indicators -->
         <div class="card shadow-sm mb-4">
@@ -110,8 +135,19 @@
                 <small class="text-muted ms-auto">Read through before starting the quiz</small>
             </div>
             <div class="card-body p-4">
-                {% if upload_session.summary %}
+                {% if upload_session.summary and upload_session.processing_status == 'completed' %}
                     <div id="summary-body"></div>
+                {% elif upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
+                    <div class="text-center text-muted py-4">
+                        <span class="spinner-border text-primary mb-3" aria-hidden="true"></span>
+                        <div class="fw-semibold">Building your study summary</div>
+                        <small>This usually takes longer for scanned PDFs or larger files.</small>
+                    </div>
+                {% elif upload_session.processing_status == 'failed' %}
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-exclamation-octagon fs-3 mb-2 d-block text-danger"></i>
+                        Summary could not be generated for this upload.
+                    </div>
                 {% else %}
                     <div class="text-center text-muted py-4">
                         <i class="bi bi-exclamation-circle fs-3 mb-2 d-block"></i>
@@ -126,7 +162,10 @@
             <a href="{% url 'home' %}" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left me-1"></i>Upload Different File
             </a>
-            <a href="{% url 'generate_quiz' upload_session.id %}" class="btn btn-primary btn-lg px-5" id="startQuizBtn">
+            <a href="{% url 'generate_quiz' upload_session.id %}"
+               class="btn btn-primary btn-lg px-5 {% if upload_session.processing_status != 'completed' %}disabled{% endif %}"
+               id="startQuizBtn"
+               {% if upload_session.processing_status != 'completed' %}aria-disabled="true"{% endif %}>
                 <i class="bi bi-lightning-charge-fill me-2"></i>I'm Ready &mdash; Start Quiz!
             </a>
         </div>
@@ -138,15 +177,43 @@
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 <script>
-    {% if upload_session.summary %}
+    {% if upload_session.summary and upload_session.processing_status == 'completed' %}
     const raw = "{{ upload_session.summary|escapejs }}";
     document.getElementById('summary-body').innerHTML = marked.parse(raw);
     {% endif %}
 
     // Show loading state when quiz generation starts
-    document.getElementById('startQuizBtn').addEventListener('click', function () {
+    document.getElementById('startQuizBtn').addEventListener('click', function (event) {
+        if (this.classList.contains('disabled')) {
+            event.preventDefault();
+            return;
+        }
         this.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Generating Quiz&hellip;';
         this.classList.add('disabled');
     });
+
+    {% if upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
+    const statusUrl = "{% url 'upload_session_status' upload_session.id %}";
+
+    async function pollProcessingStatus() {
+        try {
+            const response = await fetch(statusUrl, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            });
+            if (!response.ok) {
+                return;
+            }
+
+            const data = await response.json();
+            if (data.status === 'completed' || data.status === 'failed') {
+                window.location.reload();
+            }
+        } catch (error) {
+            console.debug('Status polling failed', error);
+        }
+    }
+
+    window.setInterval(pollProcessingStatus, 5000);
+    {% endif %}
 </script>
 {% endblock %}

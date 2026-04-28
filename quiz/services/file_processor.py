@@ -9,9 +9,7 @@ Handles text extraction from PDF and Word files using:
 import logging
 
 import docx
-import pytesseract
 import PyPDF2
-from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +66,7 @@ def _ocr_pdf(file_obj):
     text_parts = []
     try:
         from pdf2image import convert_from_bytes
+        import pytesseract
         file_bytes = file_obj.read()
         images = convert_from_bytes(file_bytes)
         for image in images:
@@ -76,8 +75,9 @@ def _ocr_pdf(file_obj):
                 text_parts.append(page_text)
     except ImportError as e:
         logger.warning(
-            "OCR skipped — pdf2image is not installed. "
-            "Run: pip install pdf2image. Also ensure poppler and tesseract-ocr are installed system-wide."
+            "OCR skipped because an optional dependency is missing: %s. "
+            "Ensure pdf2image, pytesseract, poppler, and tesseract-ocr are installed.",
+            e,
         )
     except Exception as e:
         logger.warning(f"OCR processing failed: {e}")
