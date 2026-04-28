@@ -35,7 +35,8 @@ def embed_texts(texts):
         return []
 
     model = _get_model()
-    vectors = model.encode(texts, normalize_embeddings=True)
+    # Explicitly set batch_size=64 for faster processing on multicore CPUs
+    vectors = model.encode(texts, batch_size=64, normalize_embeddings=True)
     # Convert numpy arrays to plain Python lists for pgvector
     return [v.tolist() for v in vectors]
 

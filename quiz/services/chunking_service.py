@@ -1,7 +1,7 @@
 import re
 
 
-def split_text_into_chunks(text, chunk_size_words=350, overlap_words=80):
+def split_text_into_chunks(text, chunk_size_words=600, overlap_words=120):
     normalized = re.sub(r"\s+", " ", text or "").strip()
     if not normalized:
         return []

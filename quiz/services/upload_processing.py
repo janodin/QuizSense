@@ -1,7 +1,8 @@
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
-from django.db import close_old_connections
+from django.db import close_old_connections, transaction
 from django.utils import timezone
 
 from ..models import UploadSession
@@ -50,6 +51,7 @@ def process_upload_session(upload_session_id):
 
     try:
         successful_files = []
+        # Phase 1: Rapid Extraction
         for uploaded_file in upload_session.files.all().order_by('id'):
             filename = uploaded_file.file.name.lower()
             uploaded_file.file.open('rb')
@@ -66,24 +68,40 @@ def process_upload_session(upload_session_id):
             uploaded_file.extracted_text = extracted_text
             uploaded_file.save(update_fields=['extracted_text'])
 
-            if not extracted_text or not extracted_text.strip():
-                continue
-
-            ingest_uploaded_file_chunks(uploaded_file)
-            successful_files.append(uploaded_file)
+            if extracted_text and extracted_text.strip():
+                successful_files.append(uploaded_file)
 
         if not successful_files:
-            raise ValueError("Could not extract text from the uploaded files. Please try different files.")
+            raise ValueError("Could not extract text from the uploaded files.")
 
-        context_bundle = retrieve_context_for_session(upload_session, mode='summary')
-        upload_session.summary = generate_summary(
-            context_bundle['context_text'],
-            upload_session.chapter.title if upload_session.chapter else 'Fundamentals of Programming',
-            cross_reference_notes=context_bundle['cross_reference_notes'],
-        )
+        # Phase 2: Parallel Embedding and Summarization
+        # Use a ThreadPool to run the IO-bound API call and the CPU-bound embedding in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # 1. Start Ingestion (Chunking + Local Embedding)
+            ingest_future = executor.submit(
+                lambda: [ingest_uploaded_file_chunks(f) for f in successful_files]
+            )
+
+            # 2. Start Summary (Minimax API call) 
+            # We use the combined text of successful files directly to avoid waiting for DB chunks
+            combined_text = "\n\n".join(f.extracted_text for f in successful_files)[:12000]
+            chapter_title = upload_session.chapter.title if upload_session.chapter else 'Fundamentals of Programming'
+            
+            summary_future = executor.submit(
+                generate_summary, 
+                combined_text, 
+                chapter_title
+            )
+
+            # Wait for both to finish
+            ingest_future.result()
+            summary_text = summary_future.result()
+
+        upload_session.summary = summary_text
         upload_session.processing_status = UploadSession.STATUS_COMPLETED
         upload_session.processing_completed_at = timezone.now()
         upload_session.save(update_fields=['summary', 'processing_status', 'processing_completed_at'])
+        
     except Exception as exc:
         logger.exception("Upload session processing failed for session %s", upload_session_id)
         upload_session.processing_status = UploadSession.STATUS_FAILED
