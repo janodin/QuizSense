@@ -19,9 +19,10 @@ def _get_model():
     global _transformer_model
     if _transformer_model is None:
         from sentence_transformers import SentenceTransformer
-        # paraphrase-MiniLM-L3-v2: 384 dimensions, tiny model, low RAM
-        _transformer_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
-        logger.info("sentence-transformers model loaded: paraphrase-MiniLM-L3-v2")
+        # all-MiniLM-L6-v2: 384 dimensions, much better retrieval quality than MiniLM-L3
+        # Still CPU-friendly (~90MB), semantic similarity benchmarks significantly higher
+        _transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
+        logger.info("sentence-transformers model loaded: all-MiniLM-L6-v2")
     return _transformer_model
 
 
@@ -34,7 +35,8 @@ def embed_texts(texts):
         return []
 
     model = _get_model()
-    vectors = model.encode(texts, normalize_embeddings=True)
+    # Explicitly set batch_size=64 for faster processing on multicore CPUs
+    vectors = model.encode(texts, batch_size=64, normalize_embeddings=True)
     # Convert numpy arrays to plain Python lists for pgvector
     return [v.tolist() for v in vectors]
 
