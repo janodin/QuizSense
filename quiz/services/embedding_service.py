@@ -103,6 +103,13 @@ def _maybe_unload():
                 del _transformer_model
                 _transformer_model = None
                 gc.collect()
+                # libc.malloc_trim forces the glibc allocator to release freed memory
+                # back to the OS — critical for getting RAM back from large allocations.
+                import ctypes.util, ctypes
+                libc_name = ctypes.util.find_library("c")
+                if libc_name:
+                    libc = ctypes.CDLL(libc_name)
+                    libc.malloc_trim(0)
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────
