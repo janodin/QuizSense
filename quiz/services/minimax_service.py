@@ -97,7 +97,7 @@ MCQ_PROMPT_TEMPLATE = (
 def generate_summary(text, chapter_title="Programming Fundamentals", cross_reference_notes=""):
     prompt = SUMMARY_PROMPT_TEMPLATE.format(
         chapter_title=chapter_title,
-        text=text[:6000],
+        text=text[:4000],
         cross_reference_notes=cross_reference_notes or "N/A",
     )
     return _chat_single(prompt)
@@ -106,10 +106,10 @@ def generate_summary(text, chapter_title="Programming Fundamentals", cross_refer
 def generate_mcq_questions(text, chapter_title="Programming Fundamentals", cross_reference_notes=""):
     prompt = MCQ_PROMPT_TEMPLATE.format(
         chapter_title=chapter_title,
-        text=text[:6000],
+        text=text[:4000],
         cross_reference_notes=cross_reference_notes or "N/A",
     )
-    raw = _chat_single(prompt, max_tokens=4096)
+    raw = _chat_single(prompt, max_tokens=2048)
     return _parse_mcq_response(raw)
 
 

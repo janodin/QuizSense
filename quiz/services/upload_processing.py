@@ -84,7 +84,7 @@ def process_upload_session(upload_session_id):
 
             # 2. Start Summary (Minimax API call) 
             # We use the combined text of successful files directly to avoid waiting for DB chunks
-            combined_text = "\n\n".join(f.extracted_text for f in successful_files)[:12000]
+            combined_text = "\n\n".join(f.extracted_text for f in successful_files)[:4000]
             chapter_title = upload_session.chapter.title if upload_session.chapter else 'Fundamentals of Programming'
             
             summary_future = executor.submit(
