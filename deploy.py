@@ -38,12 +38,17 @@ def deploy():
     systemctl status quizsense --no-pager
     """
     stdin, stdout, stderr = client.exec_command(commands)
-    
+
     exit_status = stdout.channel.recv_exit_status()
-    print("STDOUT:", stdout.read().decode())
-    print("STDERR:", stderr.read().decode())
+    stdout_text = stdout.read().decode('utf-8', errors='replace')
+    stderr_text = stderr.read().decode('utf-8', errors='replace')
+    # Replace non-ascii chars for Windows console compatibility
+    stdout_clean = stdout_text.encode('ascii', errors='replace').decode('ascii')
+    stderr_clean = stderr_text.encode('ascii', errors='replace').decode('ascii')
+    print("STDOUT:", stdout_clean)
+    print("STDERR:", stderr_clean)
     print("Exit status:", exit_status)
-    
+
     client.close()
 
 if __name__ == "__main__":
