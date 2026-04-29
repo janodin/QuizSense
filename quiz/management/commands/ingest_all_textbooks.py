@@ -5,7 +5,7 @@ from django.conf import settings
 from quiz.models import Chapter, Topic, TextbookChunk
 from quiz.services.file_processor import extract_text_from_pdf, extract_text_from_docx
 from quiz.services.chunking_service import split_text_into_chunks
-from quiz.services.embedding_service import embed_texts
+from quiz.services.embedding_service import embed_texts_batched
 
 
 class Command(BaseCommand):
@@ -134,8 +134,8 @@ class Command(BaseCommand):
                     failed_files.append((file_name, 'No chunks'))
                     continue
 
-                # Generate embeddings
-                embeddings = embed_texts(chunks)
+                # Generate embeddings (batched, with GC between files to keep RAM bounded)
+                embeddings = embed_texts_batched(chunks)
                 self.stdout.write(f'  ✓ Generated {len(embeddings)} embeddings')
 
                 # Save to database
@@ -158,6 +158,11 @@ class Command(BaseCommand):
                 successful_files += 1
                 chapter_distribution[chapter.number] += len(textbook_chunks)
                 self.stdout.write(self.style.SUCCESS(f'  ✓ Saved {len(textbook_chunks)} chunks to database (Chapter {chapter.number})\n'))
+
+                # Explicit GC between files — critical on 4 GB RAM Hetzner CX22
+                # so embeddings from one file don't stay resident while processing the next.
+                import gc
+                gc.collect()
 
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f'  ✗ Error: {str(e)}\n'))

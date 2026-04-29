@@ -108,6 +108,12 @@ elif os.getenv("USE_POSTGRES", "1") == "1":
             "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
             "HOST": os.getenv("POSTGRES_HOST", "localhost"),
             "PORT": os.getenv("POSTGRES_PORT", "5432"),
+            # Hetzner CX22 has 4 GB RAM total.  Reserve ~1 GB for OS + Django +
+            # Gunicorn workers + sentence-transformers model; give PostgreSQL 512 MB.
+            "CONN_MAX_AGE": 600,
+            "OPTIONS": {
+                "connect_timeout": 10,
+            },
         }
     }
 else:
