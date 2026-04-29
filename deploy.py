@@ -22,18 +22,22 @@ After=network.target postgresql.service
 User=root
 WorkingDirectory=/opt/quizsense
 EnvironmentFile=/opt/quizsense/.env
-# Gunicorn args tuned for Hetzner CX22 (4 GB RAM):
-#   workers=2      : 1 = SPOF, 3+ = OOM on 4 GB
-#   threads=1      : single-threaded; background work in daemon threads
-#   timeout=300    : PDF OCR + embedding + MiniMax API can take minutes
-#   preload-app    : COW fork sharing reduces RSS at startup
-ExecStart=/opt/quizsense/.venv/bin/gunicorn \\
+    # Gunicorn args tuned for Hetzner CX22 (4 GB RAM):
+    #   workers=2      : 1 = SPOF, 3+ = OOM on 4 GB
+    #   threads=1      : single-threaded; background work in daemon threads
+    #   timeout=300    : PDF OCR + embedding + MiniMax API can take minutes
+    #   preload-app    : COW fork sharing reduces RSS at startup
+    #   max-requests=1000 : restart worker after 1000 requests to prevent mem leaks
+    #   max-requests-jitter=200 : random jitter so not all workers restart at once
+    ExecStart=/opt/quizsense/.venv/bin/gunicorn \\
     quizsense.wsgi:application \\
     --bind 0.0.0.0:8000 \\
     --workers 2 \\
     --threads 1 \\
     --timeout 300 \\
     --worker-connections 1000 \\
+    --max-requests 1000 \\
+    --max-requests-jitter 200 \\
     --preload-app
 Restart=always
 RestartSec=5
