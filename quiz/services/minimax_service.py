@@ -90,7 +90,7 @@ MCQ_PROMPT_TEMPLATE = (
     "Chapter: {chapter_title}\n\n"
     "Retrieved Context:\n{text}\n\n"
     "Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes}\n\n"
-    "Return ONLY a valid JSON array. Each object: {\"question\", \"choices\":{\"A\",\"B\",\"C\",\"D\"}, \"correct_answer\", \"topic\"}"
+    'Return ONLY a valid JSON array. Each object: {{"question", "choices":{{"A","B","C","D"}}, "correct_answer", "topic"}}'
 )
 
 
