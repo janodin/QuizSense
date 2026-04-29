@@ -48,10 +48,9 @@ urllib3==2.6.3
 websockets==16.0
 whitenoise==6.8.2
 
-# sentence-transformers: local embeddings (all-MiniLM-L6-v2, 384 dims)
-sentence-transformers>=2.7.0
-# torch is required by sentence-transformers (CPU version — no GPU needed)
-torch>=2.0.0
+# Minimax API replaces local embeddings
+# sentence-transformers and torch removed to save RAM
+
 # ----------------------------------------------------------------------
 # For OCR (scanned PDFs), you must also install system-wide:
 #   - poppler-utils   (Ubuntu/Debian: sudo apt install poppler-utils)
