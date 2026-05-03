@@ -3,21 +3,63 @@
 
 {% block extra_css %}
 <style>
-    #summary-body h2 { font-size: 1.15rem; font-weight: 700; color: #0d6efd; margin-top: 1.4rem; margin-bottom: .4rem; }
-    #summary-body ul { padding-left: 1.25rem; margin-bottom: .5rem; }
-    #summary-body li { margin-bottom: .25rem; }
-    #summary-body p { margin-bottom: .6rem; }
-    .summary-actions {
-        gap: 0.75rem;
+    #summary-body {
+        padding: 0;
     }
+    #summary-body h1 { font-size: 1.35rem; font-weight: 700; color: var(--qs-primary); margin-top: 1.5rem; margin-bottom: 0.5rem; }
+    #summary-body h2 { font-size: 1.2rem; font-weight: 700; color: var(--qs-primary); margin-top: 1.3rem; margin-bottom: 0.4rem; }
+    #summary-body h3 { font-size: 1.1rem; font-weight: 600; color: var(--qs-text); margin-top: 1.1rem; margin-bottom: 0.35rem; }
+    #summary-body h4 { font-size: 1.05rem; font-weight: 600; color: var(--qs-text); margin-top: 1rem; margin-bottom: 0.3rem; }
+    #summary-body p {
+        margin-bottom: 0.75rem;
+        color: var(--qs-text-muted);
+        line-height: 1.7;
+    }
+    #summary-body ul,
+    #summary-body ol {
+        padding-left: 1.5rem;
+        margin-bottom: 0.75rem;
+    }
+    #summary-body li {
+        margin-bottom: 0.5rem;
+        color: var(--qs-text-muted);
+        line-height: 1.6;
+    }
+    #summary-body strong {
+        color: var(--qs-text);
+        font-weight: 600;
+    }
+    #summary-body code {
+        background: var(--qs-bg);
+        padding: 0.2em 0.5em;
+        border-radius: 4px;
+        font-size: 0.85em;
+        color: var(--qs-primary-dark);
+        font-family: 'Consolas', 'Monaco', monospace;
+    }
+    #summary-body blockquote {
+        border-left: 3px solid var(--qs-primary);
+        padding-left: 1rem;
+        margin: 1rem 0;
+        color: var(--qs-text-muted);
+        font-style: italic;
+    }
+    .summary-actions { gap: 0.75rem; }
+    .header-info { min-width: 0; }
+    .header-info small { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+    .file-item-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    
     @media (max-width: 768px) {
         .summary-actions {
             flex-direction: column;
             align-items: stretch !important;
         }
-        .summary-actions .btn {
-            width: 100%;
-        }
+        .file-item-meta { flex-wrap: wrap; gap: 0.375rem !important; }
     }
 </style>
 {% endblock %}
@@ -26,21 +68,22 @@
 <div class="row justify-content-center">
     <div class="col-lg-8">
 
-        <!-- Header -->
-        <div class="card mb-4 border-0 shadow-sm">
+        <div class="card mb-4">
             <div class="card-body d-flex align-items-center gap-3 py-3">
-                <i class="bi bi-journal-text text-primary fs-2"></i>
-                <div class="flex-grow-1">
+                <div class="icon-box flex-shrink-0">
+                    <i class="bi bi-journal-text"></i>
+                </div>
+                <div class="flex-grow-1 header-info">
                     <h5 class="fw-bold mb-0">Study Summary</h5>
                     <small class="text-muted">
                         {{ upload_session.chapter }} &mdash;
-                        {{ session_files|length }} file{{ session_files|length|pluralize }} in this session
+                        {{ session_files|length }} file{{ session_files|length|pluralize:"s," }}
                     </small>
                 </div>
-                <span class="badge
-                    {% if upload_session.processing_status == 'completed' %}bg-{{ overall_quality_class }}-subtle text-{{ overall_quality_class }} border border-{{ overall_quality_class }}-subtle
-                    {% elif upload_session.processing_status == 'failed' %}bg-danger-subtle text-danger border border-danger-subtle
-                    {% else %}bg-warning-subtle text-warning border border-warning-subtle{% endif %}">
+                <span class="badge flex-shrink-0 text-nowrap
+                    {% if upload_session.processing_status == 'completed' %}bg-{{ overall_quality_class }}
+                    {% elif upload_session.processing_status == 'failed' %}bg-danger
+                    {% else %}bg-warning{% endif %}">
                     {% if upload_session.processing_status == 'completed' %}
                         <i class="bi bi-check-circle-fill me-1"></i>{{ overall_quality_label }}
                     {% elif upload_session.processing_status == 'failed' %}
@@ -53,82 +96,113 @@
         </div>
 
         {% if upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
-        <div class="alert alert-info d-flex align-items-center gap-2" id="processingNotice">
-            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+        <div class="alert alert-info d-flex align-items-center gap-3" id="processingNotice">
+            <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
             <div>
-                <strong>We’re still processing your files.</strong>
-                OCR, chunking, embeddings, and summary generation are running in the background.
-                This page will refresh automatically when the study summary is ready.
+                <strong>Still processing your files.</strong>
+                <span class="d-block text-muted small mt-1">OCR, chunking, embeddings, and summary generation are running in the background. This page will refresh automatically when ready.</span>
             </div>
         </div>
         {% elif upload_session.processing_status == 'failed' %}
         <div class="alert alert-danger" id="processingNotice">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
             <strong>Processing failed.</strong>
             {{ upload_session.processing_error|default:"The upload could not be processed." }}
         </div>
         {% endif %}
 
-        <!-- Text Quality Indicators -->
-        <div class="card shadow-sm mb-4">
+        <div class="card mb-4">
             <div class="card-header bg-light d-flex align-items-center gap-2">
                 <i class="bi bi-clipboard-data text-primary"></i>
                 <span class="fw-semibold">Extraction Quality</span>
                 <small class="text-muted ms-auto">Review before generating quiz</small>
             </div>
             <div class="card-body">
-                <div class="row mb-3">
+                <div class="row g-3 mb-4">
                     <div class="col-md-4">
-                        <div class="text-center p-2 bg-light rounded">
-                            <div class="fs-4 fw-bold text-primary">{{ total_words }}</div>
-                            <small class="text-muted">Total Words Extracted</small>
+                        <div class="stat-card">
+                            {% if upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
+                            <div class="stat-value text-primary">
+                                <div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>
+                            </div>
+                            <div class="stat-label">Words Extracted</div>
+                            {% else %}
+                            <div class="stat-value text-primary">{{ total_words|default:"0" }}</div>
+                            <div class="stat-label">Words Extracted</div>
+                            {% endif %}
                         </div>
                     </div>
                     <div class="col-md-4">
-                        <div class="text-center p-2 bg-light rounded">
-                            <div class="fs-4 fw-bold text-primary">{{ total_chars }}</div>
-                            <small class="text-muted">Total Characters</small>
+                        <div class="stat-card">
+                            {% if upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
+                            <div class="stat-value text-primary">
+                                <div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>
+                            </div>
+                            <div class="stat-label">Characters</div>
+                            {% else %}
+                            <div class="stat-value text-muted">{{ total_chars|default:"0" }}</div>
+                            <div class="stat-label">Characters</div>
+                            {% endif %}
                         </div>
                     </div>
                     <div class="col-md-4">
-                        <div class="text-center p-2 bg-light rounded">
-                            <div class="fs-4 fw-bold text-{{ overall_quality_class }}">{{ overall_quality_label }}</div>
-                            <small class="text-muted">Overall Quality</small>
+                        <div class="stat-card">
+                            {% if upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
+                            <div class="stat-value text-primary">
+                                <div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>
+                            </div>
+                            <div class="stat-label">Overall Quality</div>
+                            {% else %}
+                            <div class="stat-value
+                                {% if overall_quality_class == 'success' %}text-success
+                                {% elif overall_quality_class == 'warning' %}text-warning
+                                {% elif overall_quality_class == 'info' %}text-info
+                                {% else %}text-danger{% endif %}">
+                                {{ overall_quality_label|default:"N/A" }}
+                            </div>
+                            <div class="stat-label">Overall Quality</div>
+                            {% endif %}
                         </div>
                     </div>
                 </div>
 
-                <!-- Per-file Quality -->
                 <div class="mt-3">
-                    <small class="text-muted fw-semibold mb-2 d-block">Files Processed:</small>
+                    <small class="text-muted fw-semibold mb-2 d-block">Files Processed</small>
                     {% for item in file_quality_data %}
-                    <div class="d-flex align-items-center justify-content-between mb-2 p-2 border rounded">
-                        <div class="d-flex align-items-center gap-2">
-                            <i class="bi bi-file-earmark-text text-muted"></i>
-                            <span class="small">{{ item.file.file.name|slice:"8:" }}</span>
-                        </div>
-                        <div class="d-flex align-items-center gap-3">
-                            <small class="text-muted">{{ item.word_count }} words</small>
-                            <span class="badge bg-{{ item.quality_class }}">
+                    <div class="d-flex align-items-center mb-2 p-2 p-md-3 rounded" style="background: var(--qs-bg); border: 1px solid var(--qs-border); cursor: pointer; transition: background var(--qs-transition);" onmouseover="this.style.background='var(--qs-primary-light)'" onmouseout="this.style.background='var(--qs-bg)'">
+                        <i class="bi bi-file-earmark-text text-muted flex-shrink-0 me-2"></i>
+                        <span class="small fw-medium file-item-name flex-grow-1">{{ item.file.file.name|slice:"8:" }}</span>
+                        <div class="d-flex align-items-center gap-2 flex-shrink-0 ms-2 file-item-meta">
+                            {% if upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
+                            <small class="text-muted text-nowrap">Processing...</small>
+                            <span class="badge bg-warning text-nowrap">
+                                <i class="bi bi-hourglass-split me-1"></i>Processing
+                            </span>
+                            {% else %}
+                            <small class="text-muted text-nowrap">{{ item.word_count }} words</small>
+                            <span class="badge bg-{{ item.quality_class }} text-nowrap">
                                 <i class="bi bi-{{ item.quality_icon }} me-1"></i>{{ item.quality_label }}
                             </span>
+                            {% endif %}
                         </div>
                     </div>
                     {% endfor %}
                 </div>
 
-                <!-- Warning if poor quality -->
+                {% if upload_session.processing_status != 'pending' and upload_session.processing_status != 'processing' %}
                 {% if overall_quality == 'poor' or overall_quality == 'failed' %}
                 <div class="alert alert-warning mt-3 mb-0">
                     <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                    <strong>Limited content detected.</strong> The quiz may have fewer questions or lower quality. 
-                    Consider re-uploading with clearer images or text-based PDFs.
+                    <strong>Limited content detected.</strong> The quiz may have fewer questions or lower quality. Consider re-uploading with clearer images or text-based PDFs.
                 </div>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
 
-        <!-- Summary Card -->
-        <div class="card shadow-sm mb-4">
+        <div class="card mb-4">
             <div class="card-header bg-light d-flex align-items-center gap-2">
                 <i class="bi bi-book-half text-primary"></i>
                 <span class="fw-semibold">Key Concepts to Review</span>
@@ -138,10 +212,10 @@
                 {% if upload_session.summary and upload_session.processing_status == 'completed' %}
                     <div id="summary-body"></div>
                 {% elif upload_session.processing_status == 'pending' or upload_session.processing_status == 'processing' %}
-                    <div class="text-center text-muted py-4">
-                        <span class="spinner-border text-primary mb-3" aria-hidden="true"></span>
+                    <div class="spinner-wrap">
+                        <div class="spinner-icon mb-3"><i class="bi bi-hourglass-split"></i></div>
                         <div class="fw-semibold">Building your study summary</div>
-                        <small>This usually takes longer for scanned PDFs or larger files.</small>
+                        <small class="text-muted">This usually takes longer for scanned PDFs or larger files.</small>
                     </div>
                 {% elif upload_session.processing_status == 'failed' %}
                     <div class="text-center text-muted py-4">
@@ -157,13 +231,12 @@
             </div>
         </div>
 
-        <!-- Action Bar -->
         <div class="d-flex align-items-center justify-content-between mb-5 summary-actions">
             <a href="{% url 'home' %}" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left me-1"></i>Upload Different File
             </a>
             <a href="{% url 'generate_quiz' upload_session.id %}"
-               class="btn btn-primary btn-lg px-5 {% if upload_session.processing_status != 'completed' %}disabled{% endif %}"
+               class="btn btn-primary px-5 {% if upload_session.processing_status != 'completed' %}disabled{% endif %}"
                id="startQuizBtn"
                {% if upload_session.processing_status != 'completed' %}aria-disabled="true"{% endif %}>
                 <i class="bi bi-lightning-charge-fill me-2"></i>I'm Ready &mdash; Start Quiz!
@@ -179,10 +252,14 @@
 <script>
     {% if upload_session.summary and upload_session.processing_status == 'completed' %}
     const raw = "{{ upload_session.summary|escapejs }}";
-    document.getElementById('summary-body').innerHTML = marked.parse(raw);
+    const html = marked.parse(raw);
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+    const firstHeading = tempDiv.querySelector('h1, h2, h3, h4');
+    if (firstHeading) firstHeading.remove();
+    document.getElementById('summary-body').innerHTML = tempDiv.innerHTML;
     {% endif %}
 
-    // Show loading state when quiz generation starts
     document.getElementById('startQuizBtn').addEventListener('click', function (event) {
         if (this.classList.contains('disabled')) {
             event.preventDefault();
@@ -200,10 +277,7 @@
             const response = await fetch(statusUrl, {
                 headers: { 'X-Requested-With': 'XMLHttpRequest' }
             });
-            if (!response.ok) {
-                return;
-            }
-
+            if (!response.ok) return;
             const data = await response.json();
             if (data.status === 'completed' || data.status === 'failed') {
                 window.location.reload();

@@ -4,10 +4,7 @@ import json
 
 
 class VectorEmbedding(models.TextField):
-    """Store a 384-dim embedding as JSON text. Works with SQLite + numpy or PostgreSQL + pgvector."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    """Store a 1536-dim embedding as JSON text. Works with SQLite + numpy or PostgreSQL + pgvector."""
 
     def from_db_value(self, value, expression, connection):
         if value is None:
@@ -89,10 +86,24 @@ class Question(models.Model):
 
 
 class Quiz(models.Model):
+    STATUS_PENDING = 'pending'
+    STATUS_PROCESSING = 'processing'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PROCESSING, 'Processing'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
     chapter = models.ForeignKey(Chapter, on_delete=models.CASCADE, related_name='quizzes')
     upload_session = models.ForeignKey('UploadSession', on_delete=models.SET_NULL, null=True, blank=True, related_name='quizzes')
     uploaded_file = models.ForeignKey(UploadedFile, on_delete=models.SET_NULL, null=True, blank=True, related_name='quizzes')
     questions = models.ManyToManyField(Question, related_name='quizzes')
+    status = models.CharField(max_length=50, default='pending', choices=STATUS_CHOICES)
+    error_message = models.TextField(blank=True, null=True)
+    generated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -103,11 +114,24 @@ class Quiz(models.Model):
 
 
 class QuizAttempt(models.Model):
+    RECOMMENDATION_PENDING = 'pending'
+    RECOMMENDATION_PROCESSING = 'processing'
+    RECOMMENDATION_COMPLETED = 'completed'
+    RECOMMENDATION_FAILED = 'failed'
+    RECOMMENDATION_STATUS_CHOICES = [
+        (RECOMMENDATION_PENDING, 'Pending'),
+        (RECOMMENDATION_PROCESSING, 'Processing'),
+        (RECOMMENDATION_COMPLETED, 'Completed'),
+        (RECOMMENDATION_FAILED, 'Failed'),
+    ]
+
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='attempts')
     session_key = models.CharField(max_length=100, blank=True)
     score = models.PositiveSmallIntegerField(default=0)
     total_questions = models.PositiveSmallIntegerField(default=10)
     ai_recommendation = models.TextField(blank=True)
+    recommendation_status = models.CharField(max_length=50, default='pending', choices=RECOMMENDATION_STATUS_CHOICES)
+    recommendation_error = models.TextField(blank=True, null=True)
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -118,9 +142,14 @@ class QuizAttempt(models.Model):
         if self.total_questions == 0:
             return 0
         return round((self.score / self.total_questions) * 100)
-    
+
     def incorrect_count(self):
         return self.total_questions - self.score
+
+    def save(self, *args, **kwargs):
+        if self.score > self.total_questions:
+            self.score = self.total_questions
+        super().save(*args, **kwargs)
 
 
 class QuizAnswer(models.Model):
@@ -128,6 +157,9 @@ class QuizAnswer(models.Model):
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='answers')
     selected_answer = models.CharField(max_length=1, choices=[('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D')])
     is_correct = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ['attempt', 'question']
 
     def __str__(self):
         return f"Answer to Q{self.question.id} — {'Correct' if self.is_correct else 'Wrong'}"

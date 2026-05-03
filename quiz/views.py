@@ -4,9 +4,11 @@ from django.contrib import messages
 from django.utils import timezone
 from .models import Chapter, Topic, UploadSession, UploadedFile, Question, Quiz, QuizAttempt, QuizAnswer
 from .forms import MultiFileUploadForm
-from .services.minimax_service import generate_mcq_questions
-from .services.rag_service import retrieve_context_for_session
-from .services.upload_processing import start_upload_session_processing
+from .services.pipeline_service import (
+    queue_upload_session_processing,
+    queue_quiz_generation,
+    queue_recommendations_generation,
+)
 
 
 def _get_session_key(request):
@@ -24,38 +26,6 @@ def _check_ownership(request, obj, owner_field='session_key'):
     owner_value = getattr(obj, owner_field, None)
     current_key = _get_session_key(request)
     return owner_value == current_key
-
-
-def _normalize_topic(title):
-    """Normalize a topic title for fuzzy matching — lowercase, strip punctuation."""
-    import re
-    return re.sub(r'[^a-z0-9\s]', '', title.lower()).strip()
-
-
-def _find_topic_for_chapter(chapter, ai_topic_name):
-    """
-    Map an AI-generated topic name to an existing seeded Topic for this chapter.
-    Falls back to creating a new topic only when no reasonable match exists.
-    """
-    if not ai_topic_name:
-        return None
-
-    normalized_ai = _normalize_topic(ai_topic_name)
-
-    # 1. Exact match (case-insensitive)
-    existing = list(Topic.objects.filter(chapter=chapter))
-    for t in existing:
-        if _normalize_topic(t.title) == normalized_ai:
-            return t
-
-    # 2. Substring match — AI topic contains existing title or vice versa
-    for t in existing:
-        norm_title = _normalize_topic(t.title)
-        if norm_title and (norm_title in normalized_ai or normalized_ai in norm_title):
-            return t
-
-    # 3. No match found — create a new topic (last resort)
-    return Topic.objects.create(chapter=chapter, title=ai_topic_name)
 
 
 def home(request):
@@ -97,14 +67,14 @@ def home(request):
                     messages.error(request, "Please upload at least one supported PDF or DOCX file.")
                     return render(request, 'quiz/home.html', {'form': form})
 
-                start_upload_session_processing(upload_session.id)
+                queue_upload_session_processing(upload_session.id)
 
             except Exception as e:
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.exception("Upload session processing failed")
                 upload_session.delete()
-                messages.error(request, f"Error during processing: {e}")
+                messages.error(request, "An error occurred during processing. Please try again or contact support.")
                 return render(request, 'quiz/home.html', {'form': form})
 
             return redirect('study_summary', upload_session_id=upload_session.id)
@@ -113,7 +83,9 @@ def home(request):
 
 
 def study_summary(request, upload_session_id):
-    upload_session = get_object_or_404(UploadSession, id=upload_session_id)
+    upload_session = get_object_or_404(
+        UploadSession.objects.prefetch_related('files'), id=upload_session_id
+    )
     if not _check_ownership(request, upload_session):
         return HttpResponseForbidden("You do not have access to this study summary.")
     session_files = upload_session.files.order_by('uploaded_at')
@@ -230,54 +202,51 @@ def generate_quiz(request, upload_session_id):
         messages.error(request, "No text could be extracted from the uploaded files.")
         return redirect('home')
 
-    context_bundle = retrieve_context_for_session(upload_session, mode='quiz')
-    if not context_bundle['context_text'].strip():
-        messages.error(request, "Could not build retrieval context for quiz generation.")
-        return redirect('home')
+    existing_quiz = Quiz.objects.filter(upload_session=upload_session, status=Quiz.STATUS_COMPLETED).first()
+    if existing_quiz:
+        return redirect('take_quiz', quiz_id=existing_quiz.id)
 
-    try:
-        mcq_list = generate_mcq_questions(
-            context_bundle['context_text'],
-            chapter.title,
-            cross_reference_notes=context_bundle['cross_reference_notes'],
-        )
-    except ValueError as exc:
-        return render(request, 'quiz/generating.html', {
-            'upload_session': upload_session,
-            'error': True,
-            'error_message': str(exc),
-        })
-
-    primary_file = upload_session.files.order_by('id').first()
     quiz = Quiz.objects.create(
         chapter=chapter,
         upload_session=upload_session,
-        uploaded_file=primary_file,
+        uploaded_file=upload_session.files.order_by('id').first(),
+        status=Quiz.STATUS_PROCESSING,
     )
 
-    for mcq in mcq_list:
-        topic = _find_topic_for_chapter(chapter, mcq.get('topic', ''))
-        question = Question.objects.create(
-            chapter=chapter,
-            topic=topic,
-            uploaded_file=primary_file,
-            text=mcq['question'],
-            choice_a=mcq['choices']['A'],
-            choice_b=mcq['choices']['B'],
-            choice_c=mcq['choices']['C'],
-            choice_d=mcq['choices']['D'],
-            correct_answer=mcq['correct_answer'],
-        )
-        quiz.questions.add(question)
+    queue_quiz_generation(upload_session_id)
 
-    return redirect('take_quiz', quiz_id=quiz.id)
+    return redirect('quiz_waiting', quiz_id=quiz.id)
+
+
+def quiz_waiting(request, quiz_id):
+    """Show waiting page while quiz is being generated."""
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+    if quiz.upload_session and not _check_ownership(request, quiz.upload_session):
+        return HttpResponseForbidden("You do not have access to this quiz.")
+    return render(request, 'quiz/quiz_waiting.html', {'quiz': quiz})
+
+
+def quiz_status(request, quiz_id):
+    """Return quiz generation status as JSON for polling."""
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+    if quiz.upload_session and not _check_ownership(request, quiz.upload_session):
+        return HttpResponseForbidden("You do not have access to this quiz.")
+
+    return JsonResponse({
+        'status': quiz.status,
+        'error': quiz.error_message or None,
+        'quiz_id': quiz.id,
+    })
 
 
 def take_quiz(request, quiz_id):
     quiz = get_object_or_404(Quiz, id=quiz_id)
     if quiz.upload_session and not _check_ownership(request, quiz.upload_session):
         return HttpResponseForbidden("You do not have access to this quiz.")
-    questions = list(quiz.questions.all())
+    if quiz.status != Quiz.STATUS_COMPLETED:
+        messages.info(request, "This quiz is still being generated. Please wait.")
+        return redirect('quiz_waiting', quiz_id=quiz.id)
+    questions = list(quiz.questions.select_related('topic', 'chapter').all())
     return render(request, 'quiz/take_quiz.html', {'quiz': quiz, 'questions': questions})
 
 def submit_quiz(request, quiz_id):
@@ -287,14 +256,16 @@ def submit_quiz(request, quiz_id):
     quiz = get_object_or_404(Quiz, id=quiz_id)
     if quiz.upload_session and not _check_ownership(request, quiz.upload_session):
         return HttpResponseForbidden("You do not have access to this quiz.")
-    questions = list(quiz.questions.all())
+    if quiz.status != Quiz.STATUS_COMPLETED:
+        messages.error(request, "This quiz is not ready for submission.")
+        return redirect('take_quiz', quiz_id=quiz_id)
+    questions = list(quiz.questions.select_related('topic', 'chapter').all())
 
     if not request.session.session_key:
         request.session.create()
 
     valid_choices = {'A', 'B', 'C', 'D'}
 
-    # Collect and validate all answers before creating the attempt
     unanswered = []
     validated_answers = []
     for question in questions:
@@ -311,11 +282,11 @@ def submit_quiz(request, quiz_id):
         )
         return redirect('take_quiz', quiz_id=quiz_id)
 
-    # All answers present — create the attempt
     attempt = QuizAttempt.objects.create(
         quiz=quiz,
         session_key=request.session.session_key or '',
         total_questions=len(questions),
+        recommendation_status=QuizAttempt.RECOMMENDATION_PROCESSING,
     )
 
     score = 0
@@ -332,7 +303,7 @@ def submit_quiz(request, quiz_id):
             is_correct=is_correct,
         )
         questions_with_answers.append({
-            'question_text': question.text,
+            'question': question.text,
             'correct_answer': question.correct_answer,
             'selected_answer': selected,
             'is_correct': is_correct,
@@ -341,23 +312,26 @@ def submit_quiz(request, quiz_id):
 
     attempt.score = score
     attempt.completed_at = timezone.now()
+    attempt.save()
 
-    # Generate AI recommendations
     try:
-        from .services.minimax_service import generate_recommendations
-        recommendation = generate_recommendations(attempt, questions_with_answers)
-        attempt.ai_recommendation = recommendation
-        attempt.save()
+        from .services.pipeline_service import _process_recommendations_for_attempt
+        result = _process_recommendations_for_attempt(attempt)
+        if result.success:
+            attempt.refresh_from_db()
+        else:
+            attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
+            attempt.recommendation_error = result.error or "Unknown error"
+            attempt.save(update_fields=["recommendation_status", "recommendation_error"])
+            messages.warning(request, "Quiz submitted, but study recommendations could not be generated.")
     except Exception as exc:
         import logging
         logger = logging.getLogger(__name__)
-        logger.warning(f"AI recommendation generation failed for attempt {attempt.id}: {exc}")
-        messages.warning(
-            request,
-            "Quiz submitted successfully, but study recommendations could not be generated."
-        )
-        attempt.save()
-        return redirect('quiz_results', attempt_id=attempt.id)
+        logger.warning("Recommendation generation failed for attempt %s: %s", attempt.id, exc)
+        attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
+        attempt.recommendation_error = str(exc)[:500]
+        attempt.save(update_fields=["recommendation_status", "recommendation_error"])
+        messages.warning(request, "Quiz submitted, but study recommendations could not be generated.")
 
     return redirect('quiz_results', attempt_id=attempt.id)
 
@@ -368,29 +342,9 @@ def quiz_results(request, attempt_id):
         return HttpResponseForbidden("You do not have access to these results.")
     incorrect = attempt.total_questions - attempt.score
     
-    # Calculate topic-wise performance
-    answers = attempt.answers.select_related('question', 'question__topic').all()
-    topic_stats = {}
-    
-    for answer in answers:
-        topic_name = answer.question.topic.title if answer.question.topic else 'General'
-        if topic_name not in topic_stats:
-            topic_stats[topic_name] = {'correct': 0, 'total': 0}
-        topic_stats[topic_name]['total'] += 1
-        if answer.is_correct:
-            topic_stats[topic_name]['correct'] += 1
-    
-    # Calculate percentages
-    for topic, stats in topic_stats.items():
-        stats['percentage'] = round((stats['correct'] / stats['total']) * 100) if stats['total'] > 0 else 0
-    
-    # Sort by percentage (weakest first)
-    topic_performance = sorted(topic_stats.items(), key=lambda x: x[1]['percentage'])
-    
     context = {
         'attempt': attempt,
         'incorrect': incorrect,
-        'topic_performance': topic_performance,
     }
     return render(request, 'quiz/results.html', context)
 
@@ -401,62 +355,5 @@ def review_quiz(request, attempt_id):
         return HttpResponseForbidden("You do not have access to this review.")
     answers = attempt.answers.select_related('question').order_by('id')
     return render(request, 'quiz/review.html', {'attempt': attempt, 'answers': answers})
-
-
-def quiz_insights(request, attempt_id):
-    """Display detailed insights and recommendations for a quiz attempt."""
-    attempt = get_object_or_404(QuizAttempt, id=attempt_id)
-    if not _check_ownership(request, attempt):
-        return HttpResponseForbidden("You do not have access to these insights.")
-    answers = attempt.answers.select_related('question', 'question__topic', 'question__chapter').all()
-    
-    # Topic-wise performance analysis
-    topic_stats = {}
-    for answer in answers:
-        topic_name = answer.question.topic.title if answer.question.topic else 'General'
-        if topic_name not in topic_stats:
-            topic_stats[topic_name] = {
-                'correct': 0,
-                'total': 0,
-                'questions': []
-            }
-        topic_stats[topic_name]['total'] += 1
-        if answer.is_correct:
-            topic_stats[topic_name]['correct'] += 1
-        topic_stats[topic_name]['questions'].append({
-            'text': answer.question.text,
-            'is_correct': answer.is_correct,
-            'selected': answer.selected_answer,
-            'correct': answer.question.correct_answer,
-        })
-    
-    # Calculate percentages and identify weak topics
-    weak_topics = []
-    strong_topics = []
-    
-    for topic, stats in topic_stats.items():
-        stats['percentage'] = round((stats['correct'] / stats['total']) * 100) if stats['total'] > 0 else 0
-        if stats['percentage'] < 70:
-            weak_topics.append((topic, stats))
-        elif stats['percentage'] >= 80:
-            strong_topics.append((topic, stats))
-    
-    # Sort by performance
-    weak_topics.sort(key=lambda x: x[1]['percentage'])
-    strong_topics.sort(key=lambda x: x[1]['percentage'], reverse=True)
-    
-    # Chapter-wise breakdown
-    chapter_name = attempt.quiz.chapter.title if attempt.quiz.chapter else 'General'
-    
-    context = {
-        'attempt': attempt,
-        'chapter_name': chapter_name,
-        'topic_stats': sorted(topic_stats.items(), key=lambda x: x[1]['percentage']),
-        'weak_topics': weak_topics,
-        'strong_topics': strong_topics,
-        'total_topics': len(topic_stats),
-    }
-    
-    return render(request, 'quiz/insights.html', context)
 
 

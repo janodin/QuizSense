@@ -6,18 +6,9 @@
     .review-layout {
         position: relative;
     }
-    .review-nav {
+    .review-sidebar {
         position: sticky;
-        top: 5.75rem;
-    }
-    .sticky-review-actions {
-        position: sticky;
-        bottom: 0.75rem;
-        background: rgba(248,249,250,0.92);
-        backdrop-filter: blur(4px);
-        border-radius: 0.75rem;
-        padding: 0.75rem;
-        z-index: 1000;
+        top: 1rem;
     }
 </style>
 {% endblock %}
@@ -25,13 +16,14 @@
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-lg-3 d-none d-lg-block review-layout">
-        <div class="card review-nav">
-            <div class="card-header bg-light">
-                <strong class="small text-muted">Jump to question</strong>
+        <div class="card review-sidebar">
+            <div class="card-header bg-light d-flex align-items-center gap-2">
+                <i class="bi bi-list-numeric text-primary"></i>
+                <span class="fw-semibold small">Jump to question</span>
             </div>
             <div class="card-body d-flex flex-wrap gap-2">
                 {% for answer in answers %}
-                <a class="btn btn-sm {% if answer.is_correct %}btn-outline-success{% else %}btn-outline-danger{% endif %}"
+                <a class="btn btn-sm {% if answer.is_correct %}btn-success{% else %}btn-danger{% endif %}"
                    href="#q-{{ forloop.counter }}">
                     {{ forloop.counter }}
                 </a>
@@ -39,11 +31,19 @@
             </div>
         </div>
     </div>
-    <div class="col-lg-8">
+    <div class="col-lg-9">
+        <div class="d-lg-none mb-3 overflow-auto">
+            <div class="d-flex gap-2 pb-2">
+                {% for answer in answers %}
+                <a href="#q-{{ forloop.counter }}" class="btn btn-sm {% if answer.is_correct %}btn-outline-success{% else %}btn-outline-danger{% endif %} flex-shrink-0" style="min-width:40px;">
+                    {{ forloop.counter }}
+                </a>
+                {% endfor %}
+            </div>
+        </div>
 
-        <!-- Header -->
-        <div class="d-flex align-items-center mb-4">
-            <a href="{% url 'quiz_results' attempt.id %}" class="btn btn-outline-secondary me-3">
+        <div class="d-flex align-items-center mb-4 gap-3">
+            <a href="{% url 'quiz_results' attempt.id %}" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left"></i>
             </a>
             <div>
@@ -54,12 +54,11 @@
             </div>
         </div>
 
-        <!-- Question Cards -->
         {% for answer in answers %}
         <div class="card mb-4"
              id="q-{{ forloop.counter }}"
-              style="border-left: 5px solid {% if answer.is_correct %}#198754{% else %}#dc3545{% endif %};">
-            <div class="card-header d-flex justify-content-between align-items-center">
+             style="border-left: 4px solid {% if answer.is_correct %}#198754{% else %}#dc3545{% endif %};">
+            <div class="card-header d-flex justify-content-between align-items-center bg-light">
                 <span class="fw-semibold">Question {{ forloop.counter }}</span>
                 {% if answer.is_correct %}
                 <span class="badge bg-success"><i class="bi bi-check-circle-fill me-1"></i>Correct</span>
@@ -67,26 +66,30 @@
                 <span class="badge bg-danger"><i class="bi bi-x-circle-fill me-1"></i>Incorrect</span>
                 {% endif %}
             </div>
-            <div class="card-body">
-                <p class="fw-semibold mb-4">{{ answer.question.text }}</p>
+            <div class="card-body p-4">
+                <p class="fw-semibold mb-4 fs-5">{{ answer.question.text }}</p>
 
                 {% for letter, choice_text in answer.question.choices_items %}
-                <div class="mb-2 p-2 rounded border
-                    {% if letter == answer.question.correct_answer %}border-success bg-success bg-opacity-10
-                    {% elif letter == answer.selected_answer and not answer.is_correct %}border-danger bg-danger bg-opacity-10
+                <div class="mb-2 p-3 rounded border
+                    {% if letter == answer.question.correct_answer %}border-success bg-success-subtle
+                    {% elif letter == answer.selected_answer and not answer.is_correct %}border-danger bg-danger-subtle
                     {% else %}border-light{% endif %}">
-                    <span class="badge
-                        {% if letter == answer.question.correct_answer %}bg-success
-                        {% elif letter == answer.selected_answer and not answer.is_correct %}bg-danger
-                        {% else %}bg-secondary{% endif %} me-2">{{ letter }}</span>
-                    {{ choice_text }}
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge
+                            {% if letter == answer.question.correct_answer %}bg-success
+                            {% elif letter == answer.selected_answer and not answer.is_correct %}bg-danger
+                            {% else %}bg-secondary{% endif %}">{{ letter }}</span>
+                        <span>{{ choice_text }}</span>
+                    </div>
                     {% if not answer.is_correct and letter == answer.question.correct_answer %}
-                    <small class="text-success ms-2 fw-semibold"><i class="bi bi-check-circle-fill"></i> Correct Answer</small>
+                    <div class="mt-1 ms-4 small text-success fw-semibold">
+                        <i class="bi bi-check-circle-fill me-1"></i>Correct Answer
+                    </div>
                     {% endif %}
                     {% if not answer.is_correct and letter == answer.selected_answer %}
-                    <small class="ms-2 fw-semibold {% if answer.is_correct %}text-success{% else %}text-danger{% endif %}">
-                        <i class="bi bi-{% if answer.is_correct %}check{% else %}x{% endif %}-circle-fill"></i> Your Answer
-                    </small>
+                    <div class="mt-1 ms-4 small text-danger fw-semibold">
+                        <i class="bi bi-x-circle-fill me-1"></i>Your Answer
+                    </div>
                     {% endif %}
                 </div>
                 {% endfor %}
@@ -94,19 +97,15 @@
         </div>
         {% endfor %}
 
-        <!-- Footer Actions -->
-        <div class="d-flex gap-3 mb-5 flex-wrap sticky-review-actions">
-            <a href="{% url 'quiz_results' attempt.id %}" class="btn btn-outline-secondary">
+        <div class="sticky-bottom-bar d-flex gap-2 mb-5 flex-wrap">
+            <a href="{% url 'quiz_results' attempt.id %}" class="btn btn-secondary">
                 <i class="bi bi-arrow-left me-2"></i>Back to Results
             </a>
-            <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-outline-primary">
-                <i class="bi bi-graph-up-arrow me-2"></i>View Insights
+            <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-danger ms-auto">
+                <i class="bi bi-arrow-repeat me-2"></i>New Quiz
             </a>
-            <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-outline-success ms-auto">
-                <i class="bi bi-arrow-repeat me-2"></i>New Quiz (Same Topic)
-            </a>
-            <a href="{% url 'home' %}" class="btn btn-outline-secondary">
-                <i class="bi bi-upload me-2"></i>Upload New File
+            <a href="{% url 'home' %}" class="btn btn-primary">
+                <i class="bi bi-upload me-2"></i>Upload New
             </a>
         </div>
 

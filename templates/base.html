@@ -6,127 +6,70 @@
     <title>{% block title %}QuizSense{% endblock %}</title>
     {% load static %}
     <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-    <!-- Bootstrap 5 CSS -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Bootstrap Icons -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="{% static 'css/style.css' %}" rel="stylesheet">
     <style>
-        :root {
-            --qs-radius: 0.875rem;
-            --qs-space-1: 0.5rem;
-            --qs-space-2: 1rem;
-            --qs-space-3: 1.5rem;
-            --qs-space-4: 2rem;
-            --qs-shadow: 0 4px 14px rgba(0,0,0,0.08);
+        html {
+            scroll-padding-top: 80px;
         }
         body {
-            background-color: #f8f9fa;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.55;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            background-color: var(--qs-bg);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--qs-text);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            padding-top: 60px;
+        }
+        .main-content {
+            flex: 1 0 auto;
+            padding-top: 2rem;
         }
         .navbar-brand {
             font-weight: 700;
-            font-size: 1.5rem;
-            letter-spacing: 1px;
+            font-size: 1.45rem;
+            letter-spacing: 0.5px;
         }
         .navbar {
-            background: linear-gradient(135deg, #0d6efd, #0a58ca);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+            background: linear-gradient(135deg, var(--qs-primary) 0%, var(--qs-primary-dark) 100%);
+            box-shadow: 0 2px 12px rgba(13, 110, 253, 0.25);
         }
-        .navbar-brand, .nav-link {
-            color: #fff !important;
-        }
-        .navbar-toggler {
-            border-color: rgba(255, 255, 255, 0.45);
-        }
-        .navbar-toggler:focus {
-            box-shadow: 0 0 0 0.2rem rgba(255,255,255,0.25);
-        }
-        .navbar-toggler-icon {
-            filter: invert(1);
-        }
+        .navbar-brand, .nav-link { color: #fff !important; }
+        .navbar-toggler { border-color: rgba(255,255,255,0.35); }
+        .navbar-toggler:focus { box-shadow: 0 0 0 0.2rem rgba(255,255,255,0.25); }
+        .navbar-toggler-icon { filter: invert(1); }
         .footer {
-            background: #212529;
-            color: #adb5bd;
-            font-size: 0.875rem;
-        }
-        .card {
-            border: none;
-            border-radius: var(--qs-radius);
-            box-shadow: var(--qs-shadow);
+            background: #1a1d21;
+            color: #8b949e;
+            font-size: 0.85rem;
         }
         .main-content {
-            margin-top: var(--qs-space-4);
-            margin-bottom: var(--qs-space-4);
+            padding-top: 2rem;
+            padding-bottom: 3rem;
         }
-        .btn-primary {
-            background: linear-gradient(135deg, #0d6efd, #0a58ca);
-            border: none;
-        }
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #0a58ca, #084298);
-        }
-        .btn {
-            border-radius: 0.75rem;
-            transition: transform .15s ease, box-shadow .15s ease;
-        }
-        .btn:hover {
-            transform: translateY(-1px);
-        }
-        .btn:focus-visible,
-        .form-control:focus-visible,
-        .form-select:focus-visible {
-            outline: 0;
-            box-shadow: 0 0 0 0.2rem rgba(13,110,253,0.25);
-        }
-        .back-to-top {
-            position: fixed;
-            right: 1rem;
-            bottom: 1rem;
-            z-index: 1200;
-            display: none;
-        }
-        .back-to-top.show {
-            display: inline-flex;
-        }
+        .btn:focus { box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15); }
         @media (max-width: 576px) {
-            .main-content {
-                margin-top: var(--qs-space-3);
-                margin-bottom: var(--qs-space-3);
-            }
-            .navbar-brand {
-                font-size: 1.2rem;
-                letter-spacing: 0.5px;
-            }
+            .main-content { padding-top: 1.5rem; }
+            .navbar-brand { font-size: 1.2rem; }
         }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
 <body>
 
-    <!-- Navbar -->
-    <nav class="navbar navbar-expand-lg">
-        <div class="container">
+    <nav class="navbar navbar-expand-lg justify-content-center" style="position: fixed; top: 0; left: 0; right: 0; z-index: 1050;">
+        <div class="container justify-content-center">
             <a class="navbar-brand d-flex align-items-center" href="{% url 'home' %}">
-                <img src="{% static 'logo.png' %}" alt="QuizSense Logo" style="width: 32px; height: 32px; margin-right: 8px;">
+                <img src="{% static 'logo.png' %}" alt="QuizSense Logo" style="width: 32px; height: 32px; margin-right: 10px;">
                 QuizSense
             </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{% url 'home' %}">
-                            <i class="bi bi-house me-1"></i>Home
-                        </a>
-                    </li>
-                </ul>
-            </div>
         </div>
     </nav>
 
-    <!-- Messages -->
     {% if messages %}
     <div class="container mt-3">
         {% for message in messages %}
@@ -138,32 +81,25 @@
     </div>
     {% endif %}
 
-    <!-- Main Content -->
     <main class="container main-content">
         {% block content %}{% endblock %}
     </main>
 
-    <!-- Footer -->
     <footer class="footer mt-auto py-3">
         <div class="container text-center">
-            <span>&copy; 2024 QuizSense &mdash; A Web Application for Multiple-Choice Question Quiz Maker</span>
+            <span>&copy; {% now "Y" %} QuizSense &mdash; AI-Powered Multiple-Choice Quiz Generator</span>
         </div>
     </footer>
 
-    <button type="button" class="btn btn-primary back-to-top" id="backToTopBtn" aria-label="Back to top">
+    <button type="button" class="btn back-to-top" id="backToTopBtn" aria-label="Back to top">
         <i class="bi bi-arrow-up"></i>
     </button>
 
-    <!-- Bootstrap 5 JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const backToTopBtn = document.getElementById('backToTopBtn');
         window.addEventListener('scroll', () => {
-            if (window.scrollY > 350) {
-                backToTopBtn.classList.add('show');
-            } else {
-                backToTopBtn.classList.remove('show');
-            }
+            backToTopBtn.classList.toggle('visible', window.scrollY > 350);
         });
         backToTopBtn.addEventListener('click', () => {
             window.scrollTo({ top: 0, behavior: 'smooth' });

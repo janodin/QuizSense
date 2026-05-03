@@ -18,7 +18,6 @@ from quiz.views import (
     study_summary,
     quiz_results,
     review_quiz,
-    quiz_insights,
 )
 from quiz.services.minimax_service import _parse_mcq_response
 
@@ -183,15 +182,6 @@ class BlankAnswerHandlingTest(TestCase):
             upload_session=self.upload_session,
             uploaded_file=self.uploaded_file,
         )
-        # Create 3 questions
-        self.questions = []
-        for i, (text, correct) in enumerate([
-            ("What is 2+2?", "B", ["Four", "Four", "Five", "Six"]),
-            ("What is the capital of France?", "C", ["London", "Berlin", "Paris", "Rome"]),
-            ("What is H2O?", "A", ["Water", "Oxygen", "Hydrogen", "Carbon"]),
-        ]):
-            q = Quiz.objects.create(chapter=self.chapter)  # temp
-            q.delete()  # need existing ID — create properly below
         # Simpler: create questions directly
         from quiz.models import Question
         Question.objects.all().delete()
@@ -254,7 +244,7 @@ class BlankAnswerHandlingTest(TestCase):
         request = self._make_post_request({})  # No answers at all
         response = submit_quiz(request, self.quiz.id)
         self.assertEqual(response.status_code, 302)
-        self.assertNotEqual(response.url, response.url)  # Will redirect to quiz page
+        self.assertRedirects(response, f'/quiz/{self.quiz.id}/take/')
 
 
 class QuizScoringTest(TestCase):

@@ -10,7 +10,7 @@ def _normalize_topic(title):
     return re.sub(r'[^a-z0-9\s]', '', (title or '').lower()).strip()
 
 
-def find_topic_for_chapter(chapter, ai_topic_name, create=True):
+def find_topic_for_chapter(chapter, ai_topic_name, create=True, existing_topics=None):
     """
     Map an AI-generated topic name to an existing seeded Topic for this chapter.
     Falls back to creating a new topic only when no reasonable match exists.
@@ -20,6 +20,7 @@ def find_topic_for_chapter(chapter, ai_topic_name, create=True):
         ai_topic_name: Topic name returned by the AI
         create: If True, create a new Topic when no match is found (default).
                 If False, return None instead.
+        existing_topics: Pre-fetched list of topics for the chapter (optional, avoids N+1 query).
 
     Returns:
         Topic instance or None
@@ -33,7 +34,10 @@ def find_topic_for_chapter(chapter, ai_topic_name, create=True):
     if not normalized_ai:
         return None
 
-    existing = list(Topic.objects.filter(chapter=chapter))
+    if existing_topics is not None:
+        existing = existing_topics
+    else:
+        existing = list(Topic.objects.filter(chapter=chapter))
 
     # 1. Exact match (case-insensitive)
     for t in existing:

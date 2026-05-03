@@ -42,10 +42,16 @@ class MultiFileUploadForm(forms.Form):
         if not files:
             raise forms.ValidationError('Please upload at least one PDF or DOCX file.')
 
+        allowed_types = [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        ]
         for file in files:
             name = file.name.lower()
             if not (name.endswith('.pdf') or name.endswith('.docx')):
                 raise forms.ValidationError('Only PDF (.pdf) and Word (.docx) files are supported.')
+            if file.content_type not in allowed_types:
+                raise forms.ValidationError(f"File type {file.content_type} is not supported.")
             if file.size > 20 * 1024 * 1024:
                 raise forms.ValidationError('Each file must be under 20 MB.')
         return files

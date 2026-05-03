@@ -24,34 +24,6 @@ _TEXTBOOK_PAGE_SIZE = 200   # chunk records per DB fetch (ID + embedding only)
 _SESSION_CHUNK_LIMIT = 100  # safety cap for session chunks (normally < 50)
 
 
-# ─── Uploaded-file ingestion ──────────────────────────────────────────────────
-
-def ingest_uploaded_file_chunks(uploaded_file):
-    chunks = split_text_into_chunks(uploaded_file.extracted_text)
-    if not chunks:
-        return 0
-
-    # ingest_uploaded_file_chunks is called from upload_processing which already
-    # runs in a single thread with bounded batch sizes, so we can embed directly.
-    embeddings = embed_texts_batched(chunks)
-    if len(embeddings) != len(chunks):
-        raise ValueError(f"Embedding mismatch: expected {len(chunks)}, got {len(embeddings)}.")
-
-    chunk_objects = [
-        UploadedChunk(
-            upload_session=uploaded_file.upload_session,
-            uploaded_file=uploaded_file,
-            chapter=uploaded_file.chapter,
-            chunk_index=index,
-            content=chunk_text,
-            embedding=embeddings[index],
-        )
-        for index, chunk_text in enumerate(chunks)
-    ]
-    UploadedChunk.objects.bulk_create(chunk_objects)
-    return len(chunk_objects)
-
-
 # ─── Query building ────────────────────────────────────────────────────────────
 
 def _build_query_text(upload_session):
@@ -171,12 +143,14 @@ def retrieve_context_for_session(upload_session, mode='quiz', quiz_top_k=8, summ
         query_np, valid_session_chunks, max(top_k, session_k)
     )[:session_k]
 
-    # ── Textbook chunks (can be thousands — page through them) ────────────────
-    # Load all textbook chunk records for this chapter and score in mini-batches
-    # to keep peak memory bounded (~200 chunks × 384 dims × 4 bytes ≈ 300 KB per page).
+    # ── Textbook chunks (sample subset to avoid loading thousands) ───────────
+    # We only need top_k matches — loading 500 chunks is more than enough.
     textbook_records = list(
-        TextbookChunk.objects.filter(chapter=upload_session.chapter)
+        TextbookChunk.objects.filter(
+            chapter=upload_session.chapter
+        )
         .only('id', 'content', 'embedding', 'topic')
+        .order_by('?')[:500]  # random sample for diversity
     )
     valid_textbook_chunks = [c for c in textbook_records if c.embedding]
     textbook_chunks = _get_top_k_chunks(

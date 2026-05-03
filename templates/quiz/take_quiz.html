@@ -1,41 +1,19 @@
 {% extends 'base.html' %}
+{% load static %}
 {% block title %}QuizSense - Take Quiz{% endblock %}
 
 {% block extra_css %}
 <style>
-    /* Sticky header */
-    .quiz-header-sticky {
+    .quiz-nav-bar {
         position: sticky;
-        top: 0;
-        z-index: 1020;
-        background-color: #ffffff;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        margin-bottom: 1.5rem;
+        top: 1rem;
+        z-index: 100;
     }
-    
-    /* Adjust scroll margin for sticky header */
-    .question-card { 
-        scroll-margin-top: 160px; 
-    }
-    
-    .btn-check:checked + .choice-btn { 
-        font-weight: 600; 
+    .question-card {
+        scroll-margin-top: 180px;
     }
     .question-card.d-none {
         display: none !important;
-    }
-    .question-chip {
-        min-width: 2.2rem;
-    }
-    .quiz-nav {
-        position: sticky;
-        bottom: 0.75rem;
-        z-index: 1030;
-        background: rgba(248,249,250,0.95);
-        backdrop-filter: blur(4px);
-        border-radius: 0.875rem;
-        padding: 0.75rem;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.08);
     }
 </style>
 {% endblock %}
@@ -44,51 +22,53 @@
 <div class="row justify-content-center">
     <div class="col-lg-8">
 
-        <!-- Quiz Header (Sticky) -->
-        <div class="card quiz-header-sticky">
-            <div class="card-body d-flex align-items-center gap-3 py-3">
-                <i class="bi bi-lightning-charge-fill text-primary fs-3"></i>
-                <div class="flex-grow-1">
-                    <h5 class="mb-0 fw-bold">{{ quiz.chapter }}</h5>
-                    <small class="text-muted">Answer all {{ questions|length }} questions to submit</small>
+        <div class="quiz-nav-bar mb-4">
+            <div class="card">
+                <div class="card-body d-flex align-items-center gap-3 py-3">
+                    <div class="icon-box flex-shrink-0" style="background: transparent; padding: 0;">
+                        <img src="{% static 'logo.png' %}" alt="" style="width: 36px; height: 36px;">
+                    </div>
+                    <div class="flex-grow-1">
+                        <h5 class="mb-0 fw-bold">{{ quiz.chapter }}</h5>
+                        <small class="text-muted">Answer all {{ questions|length }} questions to submit</small>
+                    </div>
+                    <span class="badge bg-primary fs-6" id="answered-count">0 / {{ questions|length }}</span>
                 </div>
-                <span class="badge bg-primary fs-6" id="answered-count">0 / {{ questions|length }}</span>
-            </div>
-            <div class="progress" style="height:6px; border-radius:0;">
-                <div class="progress-bar bg-primary" id="progressBar" style="width:0%; transition:width 0.3s;"></div>
+                <div class="progress" style="height: 5px; border-radius: 0;">
+                    <div class="progress-bar bg-primary progress-bar-animated-gradient" id="progressBar" style="width:0%;"></div>
+                </div>
             </div>
         </div>
 
-        <!-- Quiz Form -->
         <form method="post" action="{% url 'submit_quiz' quiz.id %}" id="quizForm">
             {% csrf_token %}
 
-            <div class="mb-3 d-flex flex-wrap gap-2" id="questionChips">
+            <div class="mb-4 d-flex flex-wrap gap-2 justify-content-center" id="questionChips">
                 {% for question in questions %}
                 <button type="button"
-                        class="btn btn-sm btn-outline-secondary question-chip"
+                        class="q-chip"
                         data-jump="{{ forloop.counter0 }}"
-                        aria-label="Go to question {{ forloop.counter }}">
+                        aria-label="Question {{ forloop.counter }}">
                     {{ forloop.counter }}
                 </button>
                 {% endfor %}
             </div>
 
             {% for question in questions %}
-            <div class="card mb-4 question-card {% if not forloop.first %}d-none{% endif %}"
+            <div class="question-card card mb-3 {% if not forloop.first %}d-none{% endif %}"
                  id="qcard-{{ forloop.counter }}"
                  data-index="{{ forloop.counter0 }}">
                 <div class="card-header d-flex justify-content-between align-items-center bg-light">
                     <span class="fw-semibold text-primary">
                         Question {{ forloop.counter }}
-                        <span class="text-muted fw-normal small">of {{ questions|length }}</span>
+                        <span class="text-muted fw-normal small">&bull; of {{ questions|length }}</span>
                     </span>
                     {% if question.topic %}
                     <span class="badge bg-secondary">{{ question.topic.title }}</span>
                     {% endif %}
                 </div>
-                <div class="card-body">
-                    <p class="fs-5 mb-4">{{ question.text }}</p>
+                <div class="card-body p-4">
+                    <p class="fs-5 mb-4 fw-medium">{{ question.text }}</p>
 
                     <div class="d-grid gap-2">
                         {% for letter, choice_text in question.choices_items %}
@@ -96,12 +76,13 @@
                             <input type="radio"
                                    class="btn-check"
                                    name="q_{{ question.id }}"
-                                    id="q{{ question.id }}_{{ letter }}"
-                                    value="{{ letter }}"
-                                    autocomplete="off">
-                            <label class="btn btn-outline-primary choice-btn w-100 text-start py-2 px-3"
+                                   id="q{{ question.id }}_{{ letter }}"
+                                   value="{{ letter }}"
+                                   autocomplete="off">
+                            <label class="choice-chip"
                                    for="q{{ question.id }}_{{ letter }}">
-                                <span class="badge bg-secondary me-2">{{ letter }}</span>{{ choice_text }}
+                                <span class="choice-letter">{{ letter }}</span>
+                                <span>{{ choice_text }}</span>
                             </label>
                         </div>
                         {% endfor %}
@@ -114,14 +95,14 @@
                 <i class="bi bi-exclamation-triangle me-2"></i>Please answer all questions before submitting.
             </div>
 
-            <div class="quiz-nav d-flex gap-2 mb-5">
-                <button type="button" class="btn btn-outline-secondary" id="prevBtn">
+            <div class="sticky-bottom-bar d-flex gap-2 mb-5">
+                <button type="button" class="btn btn-outline-primary" id="prevBtn">
                     <i class="bi bi-arrow-left me-1"></i>Previous
                 </button>
                 <button type="button" class="btn btn-outline-primary ms-auto" id="nextBtn">
                     Next<i class="bi bi-arrow-right ms-1"></i>
                 </button>
-                <button type="submit" class="btn btn-primary d-none" id="submitBtn">
+                <button type="submit" class="btn btn-primary ms-auto d-none" id="submitBtn">
                     <i class="bi bi-check-circle me-2"></i>Submit Quiz
                 </button>
             </div>
@@ -136,7 +117,7 @@
 const totalQ = {{ questions|length }};
 let activeIndex = 0;
 const cards = Array.from(document.querySelectorAll('.question-card'));
-const chips = Array.from(document.querySelectorAll('.question-chip'));
+const chips = Array.from(document.querySelectorAll('.q-chip'));
 const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 const submitBtn = document.getElementById('submitBtn');
@@ -144,10 +125,16 @@ const submitBtn = document.getElementById('submitBtn');
 function refreshNavigation() {
     cards.forEach((card, idx) => card.classList.toggle('d-none', idx !== activeIndex));
     chips.forEach((chip, idx) => {
-        chip.classList.toggle('btn-primary', idx === activeIndex);
-        chip.classList.toggle('btn-outline-secondary', idx !== activeIndex);
+        chip.classList.toggle('active', idx === activeIndex);
+        chip.classList.toggle('current', idx === activeIndex);
+        if (idx !== activeIndex) {
+            chip.classList.remove('active', 'current');
+        }
     });
-    prevBtn.disabled = activeIndex === 0;
+    const isFirst = activeIndex === 0;
+    prevBtn.disabled = isFirst;
+    prevBtn.classList.toggle('btn-outline-secondary', isFirst);
+    prevBtn.classList.toggle('btn-outline-primary', !isFirst);
     const isLast = activeIndex === totalQ - 1;
     nextBtn.classList.toggle('d-none', isLast);
     submitBtn.classList.toggle('d-none', !isLast);
@@ -166,8 +153,7 @@ document.querySelectorAll('input.btn-check').forEach(r => r.addEventListener('ch
     const card = this.closest('.question-card');
     const idx = Number(card.dataset.index);
     const chip = chips[idx];
-    chip.classList.remove('btn-outline-secondary');
-    chip.classList.add('btn-success');
+    chip.classList.add('answered');
     document.getElementById('validation-message').classList.add('d-none');
 }));
 
@@ -175,7 +161,11 @@ chips.forEach((chip) => {
     chip.addEventListener('click', () => {
         activeIndex = Number(chip.dataset.jump);
         refreshNavigation();
-        cards[activeIndex].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const card = cards[activeIndex];
+        const headerOffset = 100;
+        const elementPosition = card.getBoundingClientRect().top;
+        const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
+        window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
     });
 });
 
@@ -204,10 +194,25 @@ document.getElementById('quizForm').addEventListener('submit', function (e) {
             if (el) {
                 activeIndex = Number(el.closest('.question-card').dataset.index);
                 refreshNavigation();
-                el.closest('.question-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const card = el.closest('.question-card');
+                const headerOffset = 100;
+                const elementPosition = card.getBoundingClientRect().top;
+                const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
+                window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
             }
             return;
         }
+    }
+});
+
+    if (num >= 1 && num <= totalQ) {
+        activeIndex = num - 1;
+        refreshNavigation();
+        const card = cards[activeIndex];
+        const headerOffset = 100;
+        const elementPosition = card.getBoundingClientRect().top;
+        const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
+        window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
     }
 });
 

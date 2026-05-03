@@ -11,6 +11,7 @@ RAM optimization for Hetzner CX22 (4GB):
 """
 
 import gc
+import hashlib
 import logging
 import threading
 import time
@@ -26,10 +27,17 @@ _transformer_model = None
 _model_lock = threading.RLock()
 _last_used = [0.0]  # mutable container for last-use timestamp
 
+# ─── Embedding cache (Fix #4) ───────────────────────────────────────────────
+# Simple in-memory cache keyed by MD5(content) → embedding vector.
+# Avoids re-embedding identical chunks across files or re-uploads.
+_embedding_cache: dict[str, list] = {}
+_embedding_cache_lock = threading.Lock()
+MAX_CACHE_SIZE = 2000             # max cached embeddings before eviction
+
 
 # ─── Tunables (can be overridden via settings or environment) ───────────────
 IDLE_TIMEOUT_SECONDS = 120        # unload model after 2 min of no encoding activity
-BATCH_SIZE = 8                    # chunks per encode() call — keeps RAM bounded
+BATCH_SIZE = 16                   # chunks per encode() call — faster on modern CPUs
 MAX_CPU_THREADS = 2                # match Hetzner CX22 vCPU count (2 cores)
 
 
@@ -103,13 +111,40 @@ def _maybe_unload():
                 del _transformer_model
                 _transformer_model = None
                 gc.collect()
-                # libc.malloc_trim forces the glibc allocator to release freed memory
-                # back to the OS — critical for getting RAM back from large allocations.
-                import ctypes.util, ctypes
-                libc_name = ctypes.util.find_library("c")
-                if libc_name:
-                    libc = ctypes.CDLL(libc_name)
-                    libc.malloc_trim(0)
+                # malloc_trim is Linux-only; skip on Windows.
+                import sys
+                if sys.platform.startswith("linux"):
+                    try:
+                        import ctypes.util, ctypes
+                        libc_name = ctypes.util.find_library("c")
+                        if libc_name:
+                            libc = ctypes.CDLL(libc_name)
+                            libc.malloc_trim(0)
+                    except Exception:
+                        pass
+
+
+# ─── Cache helpers ───────────────────────────────────────────────────────────
+
+def _get_cache_key(text: str) -> str:
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
+def _get_cached_embedding(text: str) -> list | None:
+    key = _get_cache_key(text)
+    with _embedding_cache_lock:
+        return _embedding_cache.get(key)
+
+
+def _set_cached_embedding(text: str, embedding: list) -> None:
+    key = _get_cache_key(text)
+    with _embedding_cache_lock:
+        # Simple LRU-style eviction: if over limit, clear half the cache
+        if len(_embedding_cache) >= MAX_CACHE_SIZE:
+            items = list(_embedding_cache.items())
+            _embedding_cache.clear()
+            _embedding_cache.update(items[MAX_CACHE_SIZE // 2 :])
+        _embedding_cache[key] = embedding
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────
@@ -125,14 +160,33 @@ def embed_texts(texts):
     if not texts:
         return []
 
+    # Check cache first
+    results = [None] * len(texts)
+    missing_indices = []
+    missing_texts = []
+
+    for i, text in enumerate(texts):
+        cached = _get_cached_embedding(text)
+        if cached is not None:
+            results[i] = cached
+        else:
+            missing_indices.append(i)
+            missing_texts.append(text)
+
+    if not missing_texts:
+        return results
+
     model = _get_model()
     _touch()
 
-    results = []
-    for i in range(0, len(texts), BATCH_SIZE):
-        batch = texts[i : i + BATCH_SIZE]
+    for i in range(0, len(missing_texts), BATCH_SIZE):
+        batch = missing_texts[i : i + BATCH_SIZE]
         vectors = model.encode(batch, normalize_embeddings=True)
-        results.extend(v.tolist() for v in vectors)
+        for idx_in_batch, v in enumerate(vectors):
+            embedding = v.tolist()
+            original_idx = missing_indices[i + idx_in_batch]
+            results[original_idx] = embedding
+            _set_cached_embedding(missing_texts[i + idx_in_batch], embedding)
         del vectors
         gc.collect()
 
@@ -149,16 +203,78 @@ def embed_texts_batched(texts, batch_size=None):
         return []
 
     batch_size = batch_size or BATCH_SIZE
+
+    # Check cache first
+    results = [None] * len(texts)
+    missing_indices = []
+    missing_texts = []
+
+    for i, text in enumerate(texts):
+        cached = _get_cached_embedding(text)
+        if cached is not None:
+            results[i] = cached
+        else:
+            missing_indices.append(i)
+            missing_texts.append(text)
+
+    if not missing_texts:
+        return results
+
     model = _get_model()
     _touch()
 
-    all_vectors = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
+    for i in range(0, len(missing_texts), batch_size):
+        batch = missing_texts[i : i + batch_size]
         vectors = model.encode(batch, normalize_embeddings=True)
-        all_vectors.extend(v.tolist() for v in vectors)
+        for idx_in_batch, v in enumerate(vectors):
+            embedding = v.tolist()
+            original_idx = missing_indices[i + idx_in_batch]
+            results[original_idx] = embedding
+            _set_cached_embedding(missing_texts[i + idx_in_batch], embedding)
         del vectors
-        gc.collect()
 
     _maybe_unload()
-    return all_vectors
+    return results
+
+
+def embed_texts_batched(texts, batch_size=None):
+    """
+    Generate embeddings in batches — useful for large textbook ingestion.
+    Returns list of 384-dim float lists.
+    """
+    if not texts:
+        return []
+
+    batch_size = batch_size or BATCH_SIZE
+
+    # Check cache first
+    results = [None] * len(texts)
+    missing_indices = []
+    missing_texts = []
+
+    for i, text in enumerate(texts):
+        cached = _get_cached_embedding(text)
+        if cached is not None:
+            results[i] = cached
+        else:
+            missing_indices.append(i)
+            missing_texts.append(text)
+
+    if not missing_texts:
+        return results
+
+    model = _get_model()
+    _touch()
+
+    for i in range(0, len(missing_texts), batch_size):
+        batch = missing_texts[i : i + batch_size]
+        vectors = model.encode(batch, normalize_embeddings=True)
+        for idx_in_batch, v in enumerate(vectors):
+            embedding = v.tolist()
+            original_idx = missing_indices[i + idx_in_batch]
+            results[original_idx] = embedding
+            _set_cached_embedding(missing_texts[i + idx_in_batch], embedding)
+        del vectors
+
+    _maybe_unload()
+    return results

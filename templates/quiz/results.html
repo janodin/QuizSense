@@ -3,27 +3,232 @@
 
 {% block extra_css %}
 <style>
-    .chart-wrap {
-        height: 280px;
+    .results-hero {
+        background: linear-gradient(135deg, #6366f1 0%, #0d6efd 100%);
+        border-radius: var(--qs-radius-lg) var(--qs-radius-lg) 0 0;
+        padding: 2.5rem 2rem 2rem;
+        color: #fff;
+        position: relative;
+        overflow: hidden;
+    }
+    .results-hero::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.08);
+        border-radius: 50%;
+    }
+    .results-hero::after {
+        content: '';
+        position: absolute;
+        bottom: -30%;
+        left: -10%;
+        width: 200px;
+        height: 200px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+    }
+    .results-hero .trophy-icon {
+        width: 64px;
+        height: 64px;
+        background: rgba(255,255,255,0.15);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 1rem;
+        font-size: 1.75rem;
+    }
+    .results-hero h2 {
+        color: #fff;
+        font-size: 1.75rem;
+        margin-bottom: 0.25rem;
+    }
+    .results-hero .chapter-name {
+        opacity: 0.85;
+        font-size: 0.95rem;
+    }
+    .score-ring-wrap {
+        position: relative;
+        width: 130px;
+        height: 130px;
+        margin: 1.5rem auto 0;
+    }
+    .score-ring-wrap svg {
+        display: block;
+        transform: rotate(-90deg);
+    }
+    .score-ring-bg {
+        fill: none;
+        stroke: rgba(255,255,255,0.15);
+        stroke-width: 14;
+    }
+    .score-ring-fill {
+        fill: none;
+        stroke: #fff;
+        stroke-width: 14;
+        stroke-linecap: round;
+        transition: stroke-dashoffset 1s ease;
+    }
+    .score-ring-fill.excellent { stroke: #34d399; }
+    .score-ring-fill.good { stroke: #fbbf24; }
+    .score-ring-fill.practice { stroke: #f87171; }
+    .score-ring-text {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        color: #fff;
+        gap: 0;
+        padding-top: 6px;
+    }
+    .score-ring-text .percent {
+        font-size: 1.75rem;
+        font-weight: 700;
+        line-height: 1;
+    }
+    .score-ring-text .fraction {
+        font-size: 0.8rem;
+        opacity: 0.75;
+        margin-top: 0.2rem;
+    }
+    .results-body {
+        padding: 2rem;
+    }
+    .performance-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1.25rem;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 0.95rem;
+        margin-bottom: 1.25rem;
+    }
+    .performance-badge.excellent {
+        background: #d1e7dd;
+        color: #146c43;
+    }
+    .performance-badge.good {
+        background: #fff3cd;
+        color: #664d03;
+    }
+    .performance-badge.practice {
+        background: #f8d7da;
+        color: #842029;
+    }
+    .results-stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+    .result-stat {
+        text-align: center;
+        padding: 1rem 0.5rem;
+        border-radius: var(--qs-radius);
+        background: var(--qs-bg);
+    }
+    .result-stat .stat-num {
+        font-size: 1.5rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    .result-stat .stat-label {
+        font-size: 0.75rem;
+        color: var(--qs-text-muted);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 0.15rem;
     }
     .results-actions {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, 1fr);
         gap: 0.75rem;
-        margin-top: 1.25rem;
     }
     .results-actions .btn {
-        width: 100%;
-        min-height: 44px;
-        display: inline-flex;
-        align-items: center;
+        padding: 0.5rem 0.85rem;
+        font-size: 0.825rem;
+        border-radius: var(--qs-radius);
         justify-content: center;
-        padding: 0.75rem 1rem;
+        width: 100%;
+        font-weight: 500;
+        transition: all var(--qs-transition);
+    }
+    .results-actions .btn:hover {
+        transform: translateY(-1px);
+    }
+    .results-actions .btn i {
+        font-size: 1em;
+    }
+    .recommendation-card .card-body {
+        padding: 0;
+    }
+    #recommendation-body {
+        padding: 1.25rem;
+    }
+    #recommendation-body h1,
+    #recommendation-body h2,
+    #recommendation-body h3,
+    #recommendation-body h4 {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: var(--qs-primary);
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--qs-border);
+    }
+    #recommendation-body h1:first-child,
+    #recommendation-body h2:first-child,
+    #recommendation-body h3:first-child {
+        margin-top: 0;
+    }
+    #recommendation-body p {
+        margin-bottom: 0.75rem;
+        color: var(--qs-text-muted);
+        line-height: 1.7;
+    }
+    #recommendation-body ul,
+    #recommendation-body ol {
+        padding-left: 1.5rem;
+        margin-bottom: 0.75rem;
+    }
+    #recommendation-body li {
+        margin-bottom: 0.5rem;
+        color: var(--qs-text-muted);
+        line-height: 1.6;
+    }
+    #recommendation-body strong {
+        color: var(--qs-text);
+        font-weight: 600;
+    }
+    #recommendation-body code {
+        background: var(--qs-bg);
+        padding: 0.2em 0.5em;
+        border-radius: 4px;
+        font-size: 0.85em;
+        color: var(--qs-primary-dark);
+        font-family: 'Consolas', 'Monaco', monospace;
+    }
+    #recommendation-body blockquote {
+        border-left: 3px solid var(--qs-primary);
+        padding-left: 1rem;
+        margin: 1rem 0;
+        color: var(--qs-text-muted);
+        font-style: italic;
     }
     @media (max-width: 576px) {
-        .results-actions {
-            grid-template-columns: 1fr;
-        }
+        .results-hero { padding: 2rem 1.5rem 1.5rem; }
+        .results-body { padding: 1.5rem; }
+        .results-actions { grid-template-columns: 1fr; }
     }
 </style>
 {% endblock %}
@@ -32,107 +237,89 @@
 <div class="row justify-content-center">
     <div class="col-lg-7">
 
-        <!-- Score Card -->
-        <div class="card text-center shadow mb-4">
-            <div class="card-body p-5">
-                <i class="bi bi-trophy-fill text-warning fs-1 mb-3 d-block"></i>
-                <h2 class="fw-bold mb-1">Quiz Complete!</h2>
-                <p class="text-muted mb-4">{{ attempt.quiz.chapter }}</p>
+        <div class="card mb-4 overflow-hidden">
+            <div class="results-hero text-center">
+                <div class="trophy-icon">
+                    <i class="bi bi-trophy-fill"></i>
+                </div>
+                <h2>Quiz Complete!</h2>
+                <p class="chapter-name mb-0">{{ attempt.quiz.chapter }}</p>
 
-                <!-- Score Circle -->
-                <div class="mx-auto mb-4 d-flex align-items-center justify-content-center rounded-circle
-                    {% if attempt.score_percentage >= 80 %}bg-success{% elif attempt.score_percentage >= 60 %}bg-warning{% else %}bg-danger{% endif %}"
-                    style="width:150px; height:150px;">
-                    <div class="text-white">
-                        <div style="font-size:2.8rem; font-weight:700; line-height:1.1;">{{ attempt.score_percentage }}%</div>
-                        <div style="font-size:1rem;">{{ attempt.score }}/{{ attempt.total_questions }}</div>
+                <div class="score-ring-wrap">
+                    <svg width="130" height="130" viewBox="-7 -7 144 144">
+                        <circle class="score-ring-bg" cx="65" cy="65" r="55"/>
+                        <circle class="score-ring-fill
+                            {% if attempt.score_percentage >= 80 %}excellent
+                            {% elif attempt.score_percentage >= 60 %}good
+                            {% else %}practice{% endif %}"
+                            cx="65" cy="65" r="55"
+                            stroke-dasharray="346"
+                            id="scoreRingFill">
+                        </circle>
+                    </svg>
+                    <div class="score-ring-text">
+                        <span class="percent">{{ attempt.score_percentage }}%</span>
+                        <span class="fraction">{{ attempt.score }}/{{ attempt.total_questions }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="results-body text-center">
+                {% if attempt.score_percentage >= 80 %}
+                    <div class="performance-badge excellent">
+                        <i class="bi bi-emoji-smile-fill"></i> Excellent Work!
+                    </div>
+                    <p class="text-muted mb-4">Outstanding performance! You have a strong grasp of the material.</p>
+                {% elif attempt.score_percentage >= 60 %}
+                    <div class="performance-badge good">
+                        <i class="bi bi-emoji-neutral"></i> Good Job!
+                    </div>
+                    <p class="text-muted mb-4">Solid understanding, but a few topics could use more review.</p>
+                {% else %}
+                    <div class="performance-badge practice">
+                        <i class="bi bi-emoji-frown"></i> Keep Practicing
+                    </div>
+                    <p class="text-muted mb-4">Don't be discouraged &mdash; review the material and try again!</p>
+                {% endif %}
+
+                <div class="results-stats">
+                    <div class="result-stat">
+                        <div class="stat-num text-success">{{ attempt.score }}</div>
+                        <div class="stat-label">Correct</div>
+                    </div>
+                    <div class="result-stat">
+                        <div class="stat-num text-danger">{{ incorrect }}</div>
+                        <div class="stat-label">Incorrect</div>
+                    </div>
+                    <div class="result-stat">
+                        <div class="stat-num text-primary">{{ attempt.total_questions }}</div>
+                        <div class="stat-label">Total</div>
                     </div>
                 </div>
 
-                {% if attempt.score_percentage >= 80 %}
-                <h4 class="text-success fw-bold">Excellent!</h4>
-                <p class="text-muted">Outstanding performance! You have a strong grasp of the material.</p>
-                {% elif attempt.score_percentage >= 60 %}
-                <h4 class="text-warning fw-bold">Good Job!</h4>
-                <p class="text-muted">Solid understanding, but a few topics could use more review.</p>
-                {% else %}
-                <h4 class="text-danger fw-bold">Keep Practicing</h4>
-                <p class="text-muted">Don't be discouraged &mdash; review the material and try again!</p>
-                {% endif %}
-
                 <div class="results-actions">
-                    <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-outline-primary btn-sm">
-                        <i class="bi bi-graph-up-arrow me-2"></i>View Insights
-                    </a>
-                    <a href="{% url 'review_quiz' attempt.id %}" class="btn btn-outline-primary btn-sm">
+                    <a href="{% url 'review_quiz' attempt.id %}" class="btn btn-success">
                         <i class="bi bi-eye me-2"></i>Review Answers
                     </a>
-                    <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-outline-success btn-sm">
-                        <i class="bi bi-arrow-repeat me-2"></i>New Quiz (Same Topic)
+                    <a href="{% url 'generate_quiz' attempt.quiz.upload_session.id %}" class="btn btn-danger">
+                        <i class="bi bi-arrow-repeat me-2"></i>New Quiz
                     </a>
-                    <a href="{% url 'home' %}" class="btn btn-outline-secondary btn-sm">
+                    <a href="{% url 'home' %}" class="btn btn-primary">
                         <i class="bi bi-upload me-2"></i>Upload New File
                     </a>
                 </div>
             </div>
         </div>
 
-        <!-- Stats Row -->
-        <div class="row g-3 mb-4">
-            <div class="col-4">
-                <div class="card text-center p-3">
-                    <div class="text-success fw-bold" style="font-size:2rem;">{{ attempt.score }}</div>
-                    <div class="text-muted small">Correct</div>
-                </div>
+        {% if attempt.ai_recommendation %}
+        <div class="card mb-4 recommendation-card">
+            <div class="card-header bg-light d-flex align-items-center gap-2">
+                <i class="bi bi-lightbulb-fill text-warning"></i>
+                <span class="fw-semibold">Study Recommendations</span>
+                <small class="text-muted ms-auto">Follow these to improve your weak areas</small>
             </div>
-            <div class="col-4">
-                <div class="card text-center p-3">
-                    <div class="text-danger fw-bold" style="font-size:2rem;">{{ incorrect }}</div>
-                    <div class="text-muted small">Incorrect</div>
-                </div>
-            </div>
-            <div class="col-4">
-                <div class="card text-center p-3">
-                    <div class="text-primary fw-bold" style="font-size:2rem;">{{ attempt.total_questions }}</div>
-                    <div class="text-muted small">Total</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Topic Performance Preview -->
-        {% if topic_performance %}
-        <div class="card shadow mb-4">
-            <div class="card-header bg-light">
-                <h5 class="mb-0"><i class="bi bi-bar-chart-fill me-2"></i>Topic Performance</h5>
-            </div>
-            <div class="card-body">
-                <div class="chart-wrap mb-3">
-                    <canvas id="resultsTopicChart"></canvas>
-                </div>
-                <p class="text-muted mb-3">Quick overview of your performance by topic:</p>
-                {% for topic, stats in topic_performance %}
-                <div class="mb-2">
-                    <div class="d-flex justify-content-between align-items-center mb-1">
-                        <small class="fw-bold">{{ topic }}</small>
-                        <small class="badge 
-                            {% if stats.percentage >= 80 %}bg-success{% elif stats.percentage >= 60 %}bg-warning{% else %}bg-danger{% endif %}">
-                            {{ stats.percentage }}% ({{ stats.correct }}/{{ stats.total }})
-                        </small>
-                    </div>
-                    <div class="progress" style="height: 10px;">
-                        <div class="progress-bar 
-                            {% if stats.percentage >= 80 %}bg-success{% elif stats.percentage >= 60 %}bg-warning{% else %}bg-danger{% endif %}" 
-                            role="progressbar" 
-                            style="width: {{ stats.percentage }}%;">
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-                <div class="text-center mt-3">
-                    <a href="{% url 'quiz_insights' attempt.id %}" class="btn btn-sm btn-outline-primary">
-                        View Detailed Insights <i class="bi bi-arrow-right ms-1"></i>
-                    </a>
-                </div>
+            <div class="card-body p-0">
+                <div id="recommendation-body"></div>
             </div>
         </div>
         {% endif %}
@@ -142,36 +329,37 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-    const topicLabels = [{% for topic, stats in topic_performance %}"{{ topic|escapejs }}"{% if not forloop.last %}, {% endif %}{% endfor %}];
-    const topicScores = [{% for topic, stats in topic_performance %}{{ stats.percentage }}{% if not forloop.last %}, {% endif %}{% endfor %}];
-    const topicColors = topicScores.map((v) => v >= 80 ? '#198754' : (v >= 60 ? '#ffc107' : '#dc3545'));
+    const scorePercent = {{ attempt.score_percentage }};
+    const circumference = 2 * Math.PI * 55;
+    const offset = circumference - (scorePercent / 100) * circumference;
+    document.getElementById('scoreRingFill').style.strokeDashoffset = offset;
 
-    if (topicLabels.length) {
-        const ctx = document.getElementById('resultsTopicChart');
-        new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: topicLabels,
-                datasets: [{
-                    label: 'Score %',
-                    data: topicScores,
-                    backgroundColor: topicColors,
-                    borderRadius: 6
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: { beginAtZero: true, max: 100 }
-                },
-                plugins: {
-                    legend: { display: false }
-                }
-            }
-        });
+    const percentEl = document.querySelector('.score-ring-text .percent');
+    const targetPercent = {{ attempt.score_percentage }};
+    let currentPercent = 0;
+    const duration = 1200;
+    const startTime = performance.now();
+    function animateCount(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        currentPercent = Math.round(eased * targetPercent);
+        percentEl.textContent = currentPercent + '%';
+        if (progress < 1) requestAnimationFrame(animateCount);
     }
+    requestAnimationFrame(animateCount);
 </script>
+{% if attempt.ai_recommendation %}
+<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+<script>
+    const raw = "{{ attempt.ai_recommendation|escapejs }}";
+    const html = marked.parse(raw);
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+    const firstHeading = tempDiv.querySelector('h1, h2, h3, h4');
+    if (firstHeading) firstHeading.remove();
+    document.getElementById('recommendation-body').innerHTML = tempDiv.innerHTML;
+</script>
+{% endif %}
 {% endblock %}

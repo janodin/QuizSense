@@ -1,6 +1,11 @@
 """
-Async tasks for QuizSense quiz generation.
+Async tasks for QuizSense.
 Run worker: celery -A quizsense worker --loglevel=info
+
+Tasks:
+- process_upload_session_task: Upload → extract → chunk → embed → summary
+- generate_quiz_task: Session → RAG → quiz generation
+- generate_recommendations_task: Attempt → AI recommendations
 """
 import logging
 from celery import shared_task
@@ -8,83 +13,101 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+@shared_task(bind=True, max_retries=2, default_retry_delay=30, time_limit=600, soft_time_limit=540)
 def process_upload_session_task(self, upload_session_id):
     """
-    Durable background task for upload extraction and summary generation.
-    Falls back to the same service used by local threaded processing.
+    Upload processing: extract text → chunk → embed → generate summary.
+    Uses simplified sequential pipeline.
     """
-    from .services.upload_processing import process_upload_session
+    from .services.pipeline_service import process_upload_session_simple
 
     try:
-        process_upload_session(upload_session_id)
+        process_upload_session_simple(upload_session_id)
     except Exception as exc:
-        logger.error("Upload session %s processing task failed: %s", upload_session_id, exc)
+        logger.error("Upload session %s processing failed: %s", upload_session_id, exc)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30)
-def generate_quiz_for_session_task(self, upload_session_id):
+@shared_task(bind=True, max_retries=2, default_retry_delay=30, time_limit=300, soft_time_limit=270)
+def generate_quiz_task(self, upload_session_id):
     """
-    Generate the quiz connected to an upload session after its summary is ready.
-    """
-    from .services.learning_pipeline import generate_quiz_for_session
-
-    try:
-        generate_quiz_for_session(upload_session_id)
-    except Exception as exc:
-        logger.error("Upload session %s quiz generation task failed: %s", upload_session_id, exc)
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc)
-        raise
-
-
-@shared_task(bind=True, max_retries=2, default_retry_delay=30)
-def generate_quiz_task(self, quiz_id):
-    """
-    Backward-compatible task entrypoint for older queued jobs.
-    New code queues generate_quiz_for_session_task.
+    Generate quiz for an upload session after summary is ready.
+    Uses RAG to retrieve context and generates 10 MCQs via AI.
     """
     from .models import Quiz
-    from .services.learning_pipeline import generate_quiz_for_session
-
-    quiz = Quiz.objects.select_related('upload_session').get(id=quiz_id)
-    if not quiz.upload_session_id:
-        quiz.status = Quiz.STATUS_FAILED
-        quiz.error_message = "Quiz has no associated upload session."
-        quiz.save(update_fields=['status', 'error_message'])
-        return
+    from .services.pipeline_service import _process_quiz_for_session
 
     try:
-        generate_quiz_for_session(quiz.upload_session_id)
+        result = _process_quiz_for_session(upload_session_id)
+        if result.success:
+            logger.info(
+                "Quiz generated for session %s (duration=%.1fms)",
+                upload_session_id,
+                result.duration_ms,
+            )
+        else:
+            # CRITICAL FIX: Mark quiz as FAILED so the polling page stops spinning
+            logger.warning(
+                "Quiz generation for session %s failed: %s",
+                upload_session_id,
+                result.error,
+            )
+            try:
+                from .models import UploadSession
+                upload_session = UploadSession.objects.get(id=upload_session_id)
+                quiz = Quiz.objects.filter(upload_session=upload_session).order_by('-created_at').first()
+                if quiz and quiz.status == Quiz.STATUS_PROCESSING:
+                    quiz.status = Quiz.STATUS_FAILED
+                    quiz.error_message = (result.error or "Quiz generation failed")[:500]
+                    quiz.save(update_fields=["status", "error_message"])
+            except Exception as inner_exc:
+                logger.error("Failed to update quiz FAILED status for session %s: %s", upload_session_id, inner_exc)
     except Exception as exc:
-        logger.error("Quiz %s generation task failed: %s", quiz_id, exc)
+        logger.error("Quiz generation failed for session %s: %s", upload_session_id, exc)
+        try:
+            from .models import UploadSession
+            upload_session = UploadSession.objects.get(id=upload_session_id)
+            quiz = Quiz.objects.filter(upload_session=upload_session).order_by('-created_at').first()
+            if quiz:
+                quiz.status = Quiz.STATUS_FAILED
+                quiz.error_message = str(exc)[:500]
+                quiz.save(update_fields=["status", "error_message"])
+        except Exception as inner_exc:
+            logger.error("Failed to update quiz status for session %s: %s", upload_session_id, inner_exc)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+@shared_task(bind=True, max_retries=2, default_retry_delay=120, soft_time_limit=90)
 def generate_recommendations_task(self, attempt_id):
     """
-    Celery task to asynchronously generate AI study recommendations for a quiz attempt.
+    Generate AI study recommendations for a completed quiz attempt.
     """
     from .models import QuizAttempt
-    from .services.learning_pipeline import generate_recommendations_for_attempt
+    from .services.pipeline_service import generate_recommendations_for_attempt
 
     try:
-        generate_recommendations_for_attempt(attempt_id)
-        logger.info(f"Recommendations generated for attempt {attempt_id}.")
+        result = generate_recommendations_for_attempt(attempt_id)
+        logger.info(
+            "Recommendations for attempt %s (success=%s, duration=%.1fms)",
+            attempt_id,
+            result.success,
+            result.duration_ms,
+        )
     except Exception as exc:
-        logger.error(f"Recommendations generation failed for attempt {attempt_id}: {exc}")
+        logger.error(
+            "Recommendations failed for attempt %s: %s",
+            attempt_id,
+            exc,
+        )
         attempt = QuizAttempt.objects.get(id=attempt_id)
         attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
         attempt.recommendation_error = str(exc)
-        attempt.save(update_fields=['recommendation_status', 'recommendation_error'])
+        attempt.save(update_fields=["recommendation_status", "recommendation_error"])
 
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
-
         raise
