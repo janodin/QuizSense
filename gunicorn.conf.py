@@ -31,4 +31,4 @@ errorlog = "-"
 loglevel = "info"
 
 # Bind address (override with -b flag if needed)
-bind = "0.0.0.0:8000"
+bind = "0.0.0.0:8001"
