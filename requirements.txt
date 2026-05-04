@@ -63,8 +63,8 @@ torch>=2.0.0
 #   - On Windows: install poppler from https://github.com/oschwartz10612/poppler-windows
 #     and tesseract from https://github.com/UB-Mannheim/tesseract/wiki
 #
-# NOTE: This project uses MiniMax API (minimaxi.chat), NOT Google Gemini.
-#       The following packages were removed as they are unused:
-#       google-ai-generativelanguage, google-api-core, google-api-python-client,
-#       google-auth, google-auth-httplib2, google-genai, google-generativeai,
-#       googleapis-common-protos, grpcio, grpcio-status
+# Google Gemini SDK (used as fallback when MiniMax times out)
+google-genai>=1.0.0
+
+# NOTE: MiniMax is the primary AI provider, but Gemini is used as a fallback.
+#       Both packages are required for production.
