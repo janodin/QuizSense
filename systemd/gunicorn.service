@@ -1,0 +1,21 @@
+[Unit]
+Description=gunicorn daemon for QuizSense
+After=network.target
+
+[Service]
+User=root
+Group=www-data
+WorkingDirectory=/opt/quizsense
+Environment="PATH=/opt/quizsense/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=quizsense.settings"
+ExecStart=/opt/quizsense/venv/bin/gunicorn -c gunicorn.conf.py quizsense.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
