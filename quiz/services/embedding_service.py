@@ -27,12 +27,13 @@ _transformer_model = None
 _model_lock = threading.RLock()
 _last_used = [0.0]  # mutable container for last-use timestamp
 
-# ─── Embedding cache (Fix #4) ───────────────────────────────────────────────
-# Simple in-memory cache keyed by MD5(content) → embedding vector.
+# ─── Embedding cache ──────────────────────────────────────────────────────────
+# Uses Django's Redis cache backend for cross-process sharing and persistence
+# across worker restarts. Falls back to in-memory if Redis is unavailable.
 # Avoids re-embedding identical chunks across files or re-uploads.
 _embedding_cache: dict[str, list] = {}
 _embedding_cache_lock = threading.Lock()
-MAX_CACHE_SIZE = 2000             # max cached embeddings before eviction
+MAX_CACHE_SIZE = 2000             # fallback in-memory cache size
 
 
 # ─── Tunables (can be overridden via settings or environment) ───────────────
@@ -112,27 +113,41 @@ def _get_model():
         return _transformer_model
 
 
-def _maybe_unload():
-    """Called after each encode() call; triggers eviction when idle."""
+def _maybe_unload(force: bool = False):
+    """
+    Evict the embedding model to free RAM.
+
+    * force=True  – unload immediately (used by pipeline after a task finishes).
+    * force=False – only unload if idle for longer than IDLE_TIMEOUT_SECONDS.
+    """
     global _transformer_model
-    if _idle_seconds() > IDLE_TIMEOUT_SECONDS:
-        with _model_lock:
-            if _transformer_model is not None and _idle_seconds() > IDLE_TIMEOUT_SECONDS:
+
+    should_unload = force or (_idle_seconds() > IDLE_TIMEOUT_SECONDS)
+    if not should_unload:
+        return
+
+    with _model_lock:
+        # Re-check inside the lock in case another thread changed state.
+        should_unload = force or (_idle_seconds() > IDLE_TIMEOUT_SECONDS)
+        if _transformer_model is not None and should_unload:
+            if force:
+                logger.info("Embedding model force-unloaded to free RAM.")
+            else:
                 logger.info("Embedding model idle — evicting to free RAM.")
-                del _transformer_model
-                _transformer_model = None
-                gc.collect()
-                # malloc_trim is Linux-only; skip on Windows.
-                import sys
-                if sys.platform.startswith("linux"):
-                    try:
-                        import ctypes.util, ctypes
-                        libc_name = ctypes.util.find_library("c")
-                        if libc_name:
-                            libc = ctypes.CDLL(libc_name)
-                            libc.malloc_trim(0)
-                    except Exception:
-                        pass
+            del _transformer_model
+            _transformer_model = None
+            gc.collect()
+            # malloc_trim is Linux-only; skip on Windows.
+            import sys
+            if sys.platform.startswith("linux"):
+                try:
+                    import ctypes.util, ctypes
+                    libc_name = ctypes.util.find_library("c")
+                    if libc_name:
+                        libc = ctypes.CDLL(libc_name)
+                        libc.malloc_trim(0)
+                except Exception:
+                    pass
 
 
 # ─── Cache helpers ───────────────────────────────────────────────────────────
@@ -143,14 +158,29 @@ def _get_cache_key(text: str) -> str:
 
 def _get_cached_embedding(text: str) -> list | None:
     key = _get_cache_key(text)
+    # Try Django Redis cache first (shared across workers)
+    try:
+        from django.core.cache import cache
+        val = cache.get(f"emb:{key}")
+        if val is not None:
+            return val
+    except Exception:
+        pass
+    # Fallback to in-memory cache
     with _embedding_cache_lock:
         return _embedding_cache.get(key)
 
 
 def _set_cached_embedding(text: str, embedding: list) -> None:
     key = _get_cache_key(text)
+    # Store in Django Redis cache (shared, persistent)
+    try:
+        from django.core.cache import cache
+        cache.set(f"emb:{key}", embedding, timeout=60 * 60 * 24 * 7)
+    except Exception:
+        pass
+    # Also store in in-memory fallback
     with _embedding_cache_lock:
-        # Simple LRU-style eviction: if over limit, clear half the cache
         if len(_embedding_cache) >= MAX_CACHE_SIZE:
             items = list(_embedding_cache.items())
             _embedding_cache.clear()

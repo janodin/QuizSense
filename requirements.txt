@@ -48,6 +48,9 @@ urllib3==2.6.3
 websockets==16.0
 whitenoise==6.8.2
 
+# Memory monitoring (optional but recommended)
+psutil>=5.9.0
+
 # sentence-transformers: local embeddings (all-MiniLM-L6-v2, 384 dims)
 sentence-transformers>=2.7.0
 # torch is required by sentence-transformers (CPU version — no GPU needed)

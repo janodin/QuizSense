@@ -99,7 +99,7 @@ WSGI_APPLICATION = "quizsense.wsgi.application"
 database_url = os.getenv("DATABASE_URL", "").strip()
 if database_url:
     DATABASES = {
-        "default": dj_database_url.parse(database_url, conn_max_age=600, ssl_require=True),
+        "default": dj_database_url.parse(database_url, conn_max_age=60, ssl_require=True),
     }
 elif os.getenv("USE_POSTGRES", "1") == "1":
     DATABASES = {
@@ -112,7 +112,7 @@ elif os.getenv("USE_POSTGRES", "1") == "1":
             "PORT": os.getenv("POSTGRES_PORT", "5432"),
             # Hetzner CX22 has 4 GB RAM total.  Reserve ~1 GB for OS + Django +
             # Gunicorn workers + sentence-transformers model; give PostgreSQL 512 MB.
-            "CONN_MAX_AGE": 600,
+            "CONN_MAX_AGE": 60,
             "OPTIONS": {
                 "connect_timeout": 10,
             },
@@ -203,6 +203,17 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# ─── Memory-safety settings for Celery workers ───────────────────────────────
+# Restart workers after N tasks to prevent memory leaks from PyTorch/numpy.
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 10
+
+# Restart worker if it exceeds 512 MB RSS (prevents runaway memory).
+# Value is in KB.
+CELERY_WORKER_MAX_MEMORY_PER_CHILD = 524288
+
+# Reduce DB connection lifetime to avoid holding idle connections.
+DATABASES["default"]["CONN_MAX_AGE"] = 60
 
 # Redis Cache
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')

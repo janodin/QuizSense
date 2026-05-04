@@ -359,7 +359,7 @@ class MiniMaxProvider(AIProvider):
             f"Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes or 'N/A'}\n\n"
             'Return ONLY a valid JSON array. Each object: {{"question", "choices":{{"A","B","C","D"}}, "correct_answer", "topic"}}'
         )
-        raw = self._make_request(prompt, max_tokens=4096, timeout=120)
+        raw = self._make_request(prompt, max_tokens=4096, timeout=20)
 
         cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
         start = cleaned.find("[")
@@ -397,7 +397,7 @@ class MiniMaxProvider(AIProvider):
             f"--- Incorrect Answers ---\n{wrong_summary}\n\n"
             f"Focus on the weak topics and explain what the student should study to improve."
         )
-        return self._make_request(prompt)
+        return self._make_request(prompt, timeout=20)
 
     def get_provider_name(self) -> str:
         return "minimax"
@@ -947,7 +947,10 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
     Logs every step to quizsense_processing.log with durations.
     """
     from .timing_logger import ProcessingTimer
+    from .memory_monitor import log_memory
+    import gc
 
+    log_memory(f"[SESSION {upload_session_id}] START")
     logger.info("[SESSION %s] Starting upload processing", upload_session_id)
 
     upload_session = UploadSession.objects.select_related("chapter").get(id=upload_session_id)
@@ -992,7 +995,9 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
 
                 file.extracted_text = extracted_text
                 file.save(update_fields=["extracted_text"])
-                timer.detail(f"Extracted {len(extracted_text or '')} chars from {filename}")
+                extracted_len = len(extracted_text or '')
+                del extracted_text  # Free RAM immediately
+                timer.detail(f"Extracted {extracted_len} chars from {filename}")
 
         timings["TEXT_EXTRACTION"] = time.time() - upload_session.processing_started_at.timestamp()
 
@@ -1067,6 +1072,11 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
             )
 
         logger.info("[SESSION %s] Processing completed in %.1fs", upload_session_id, total_elapsed)
+        log_memory(f"[SESSION {upload_session_id}] END")
+        # Force unload embedding model and run GC to free RAM immediately
+        from .embedding_service import _maybe_unload
+        _maybe_unload(force=True)
+        gc.collect()
         return results
 
     except Exception as exc:
@@ -1082,6 +1092,11 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
                 "processing_completed_at",
             ]
         )
+        log_memory(f"[SESSION {upload_session_id}] FAILED")
+        # Force unload embedding model even on failure
+        from .embedding_service import _maybe_unload
+        _maybe_unload(force=True)
+        gc.collect()
         return {
             "summary": GenerationResult(
                 success=False, error=str(exc), generation_type=GenerationType.SUMMARY

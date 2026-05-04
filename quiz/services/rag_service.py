@@ -144,13 +144,13 @@ def retrieve_context_for_session(upload_session, mode='quiz', quiz_top_k=8, summ
     )[:session_k]
 
     # ── Textbook chunks (sample subset to avoid loading thousands) ───────────
-    # We only need top_k matches — loading 500 chunks is more than enough.
+    # We only need top_k matches — loading 200 chunks is more than enough.
     textbook_records = list(
         TextbookChunk.objects.filter(
             chapter=upload_session.chapter
         )
         .only('id', 'content', 'embedding', 'topic')
-        .order_by('?')[:500]  # random sample for diversity
+        .order_by('?')[:200]  # random sample for diversity
     )
     valid_textbook_chunks = [c for c in textbook_records if c.embedding]
     textbook_chunks = _get_top_k_chunks(
