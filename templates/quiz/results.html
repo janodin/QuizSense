@@ -311,18 +311,30 @@
             </div>
         </div>
 
-        {% if attempt.ai_recommendation %}
-        <div class="card mb-4 recommendation-card">
+        <div class="card mb-4 recommendation-card" id="recommendation-card" {% if not attempt.ai_recommendation and attempt.recommendation_status == 'failed' %}style="display:none;"{% endif %}>
             <div class="card-header bg-light d-flex align-items-center gap-2">
                 <i class="bi bi-lightbulb-fill text-warning"></i>
                 <span class="fw-semibold">Study Recommendations</span>
-                <small class="text-muted ms-auto">Follow these to improve your weak areas</small>
+                <small class="text-muted ms-auto" id="rec-status-label">
+                    {% if attempt.recommendation_status == 'processing' %}Generating...{% else %}Follow these to improve your weak areas{% endif %}
+                </small>
             </div>
             <div class="card-body p-0">
-                <div id="recommendation-body"></div>
+                <div id="recommendation-body">
+                    {% if attempt.recommendation_status == 'processing' %}
+                        <div class="p-4 text-center text-muted">
+                            <div class="spinner-border spinner-border-sm text-primary mb-2" role="status"></div>
+                            <p class="mb-0">Analyzing your answers and generating personalized recommendations...</p>
+                        </div>
+                    {% elif attempt.recommendation_status == 'failed' %}
+                        <div class="p-4 text-center text-muted">
+                            <i class="bi bi-exclamation-circle fs-4 text-warning mb-2 d-block"></i>
+                            <p class="mb-0">Recommendations could not be generated. You can refresh the page to try again.</p>
+                        </div>
+                    {% endif %}
+                </div>
             </div>
         </div>
-        {% endif %}
 
     </div>
 </div>
@@ -350,16 +362,61 @@
     }
     requestAnimationFrame(animateCount);
 </script>
-{% if attempt.ai_recommendation %}
 <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 <script>
     const raw = "{{ attempt.ai_recommendation|escapejs }}";
-    const html = marked.parse(raw);
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = html;
-    const firstHeading = tempDiv.querySelector('h1, h2, h3, h4');
-    if (firstHeading) firstHeading.remove();
-    document.getElementById('recommendation-body').innerHTML = tempDiv.innerHTML;
+    if (raw) {
+        const html = marked.parse(raw);
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const firstHeading = tempDiv.querySelector('h1, h2, h3, h4');
+        if (firstHeading) firstHeading.remove();
+        document.getElementById('recommendation-body').innerHTML = tempDiv.innerHTML;
+    }
+
+    // Poll for recommendations if they're still being generated
+    {% if attempt.recommendation_status == 'processing' %}
+    (function poll() {
+        const attemptId = {{ attempt.id }};
+        const pollInterval = 3000; // 3 seconds
+        const maxPolls = 40; // ~2 minutes max
+        let polls = 0;
+
+        function doPoll() {
+            polls++;
+            if (polls > maxPolls) return;
+
+                fetch(`/results/${attemptId}/recommendation-status/`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.recommendation_html) {
+                        // Content available — render it regardless of status string
+                        const html = marked.parse(data.recommendation_html);
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = html;
+                        const firstHeading = tempDiv.querySelector('h1, h2, h3, h4');
+                        if (firstHeading) firstHeading.remove();
+                        document.getElementById('recommendation-body').innerHTML = tempDiv.innerHTML;
+                        document.getElementById('rec-status-label').textContent = 'Follow these to improve your weak areas';
+                    } else if (data.status === 'failed') {
+                        document.getElementById('recommendation-body').innerHTML = `
+                            <div class="p-4 text-center text-muted">
+                                <i class="bi bi-exclamation-circle fs-4 text-warning mb-2 d-block"></i>
+                                <p class="mb-0">Recommendations could not be generated. ${data.error || ''}</p>
+                            </div>
+                        `;
+                        document.getElementById('rec-status-label').textContent = 'Failed';
+                    } else {
+                        setTimeout(doPoll, pollInterval);
+                    }
+                })
+                .catch(() => {
+                    setTimeout(doPoll, pollInterval);
+                });
+        }
+
+        setTimeout(doPoll, pollInterval);
+    })();
+    {% endif %}
 </script>
-{% endif %}
 {% endblock %}

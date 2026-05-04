@@ -14,14 +14,17 @@ Key functions:
 All use MiniMax M2.7 as primary AI provider with Gemini fallback.
 """
 
+import hashlib
 import logging
 import time
 import threading
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
+from django.core.cache import cache
 from django.db import close_old_connections, transaction
 from django.utils import timezone
 
@@ -144,18 +147,24 @@ class GeminiProvider(AIProvider):
     ) -> str:
         prompt = (
             "You are an expert programming instructor. Based on the context below, "
-            "write a polished study summary in 180-260 words.\n\n"
+            "write a polished, richly-formatted study summary in 180-260 words.\n\n"
             f"Chapter: {chapter_title}\n\n"
             f"Context:\n{text[:12000]}\n\n"
             f"Cross-Reference Notes:\n{cross_reference_notes or 'N/A'}\n\n"
+            "Formatting rules (IMPORTANT):\n"
+            "- Wrap every programming keyword, function name, variable, syntax, or code snippet in backticks, e.g. `for`, `while`, `print()`, `x = 5`, `if-else`.\n"
+            "- Use **bold** for emphasis on critical terms and section labels.\n"
+            "- Use a clean Markdown structure with headings and bullet lists.\n\n"
             "Use this exact Markdown structure:\n"
             "## Study Summary\n"
             "### Overview\n"
-            "Write 2-3 clear sentences explaining the main idea of the material.\n\n"
+            "Write 2-3 clear sentences explaining the main idea of the material. Use backticks for any code mentioned.\n\n"
             "### Key Concepts\n"
-            "- List 4-6 important concepts or definitions from the material.\n\n"
+            "- **Concept name**: Explanation with `code` keywords highlighted.\n"
+            "- **Another concept**: Explanation with `code` keywords highlighted.\n\n"
             "### Review Focus\n"
-            "- List 2-3 items the student should pay attention to before taking the quiz.\n\n"
+            "- **Label**: Actionable item with `code` keywords where relevant.\n"
+            "- **Label**: Another actionable item with `code` keywords.\n\n"
             "Return only the study summary Markdown now:"
         )
         return self._chat(prompt, max_tokens=1024)
@@ -236,14 +245,14 @@ class MiniMaxProvider(AIProvider):
         self._url = "https://api.minimax.io/anthropic/v1/messages"
         self._model = "MiniMax-M2.7"
 
-    def _make_request(self, prompt: str, max_tokens: int = 1024) -> str:
+    def _make_request(self, prompt: str, max_tokens: int = 1024, timeout: int = 60) -> str:
         import json
         import time
         import requests
         from django.conf import settings
 
         start_time = time.time()
-        logger.info("[MINIMAX] Sending request (prompt_length=%d, max_tokens=%d)", len(prompt), max_tokens)
+        logger.info("[MINIMAX] Sending request (prompt_length=%d, max_tokens=%d, timeout=%d)", len(prompt), max_tokens, timeout)
 
         headers = {
             "Authorization": f"Bearer {settings.MINIMAX_API_KEY}",
@@ -258,12 +267,12 @@ class MiniMaxProvider(AIProvider):
         }
 
         try:
-            response = requests.post(self._url, headers=headers, json=payload, timeout=60)
+            response = requests.post(self._url, headers=headers, json=payload, timeout=timeout)
             elapsed = time.time() - start_time
             logger.info("[MINIMAX] Response received in %.1fs (status=%d)", elapsed, response.status_code)
         except requests.exceptions.Timeout:
-            logger.error("[MINIMAX] Request timed out after 60s")
-            raise ValueError("MiniMax API request timed out after 60 seconds")
+            logger.error("[MINIMAX] Request timed out after %ds", timeout)
+            raise ValueError(f"MiniMax API request timed out after {timeout} seconds")
         except requests.exceptions.ConnectionError as e:
             logger.error("[MINIMAX] Connection error: %s", e)
             raise ValueError(f"MiniMax API connection error: {e}")
@@ -301,18 +310,24 @@ class MiniMaxProvider(AIProvider):
     ) -> str:
         prompt = (
             "You are an expert programming instructor. Based on the context below, "
-            "write a polished study summary in 180-260 words.\n\n"
+            "write a polished, richly-formatted study summary in 180-260 words.\n\n"
             f"Chapter: {chapter_title}\n\n"
             f"Context:\n{text[:12000]}\n\n"
             f"Cross-Reference Notes:\n{cross_reference_notes or 'N/A'}\n\n"
+            "Formatting rules (IMPORTANT):\n"
+            "- Wrap every programming keyword, function name, variable, syntax, or code snippet in backticks, e.g. `for`, `while`, `print()`, `x = 5`, `if-else`.\n"
+            "- Use **bold** for emphasis on critical terms and section labels.\n"
+            "- Use a clean Markdown structure with headings and bullet lists.\n\n"
             "Use this exact Markdown structure:\n"
             "## Study Summary\n"
             "### Overview\n"
-            "Write 2-3 clear sentences explaining the main idea of the material.\n\n"
+            "Write 2-3 clear sentences explaining the main idea of the material. Use backticks for any code mentioned.\n\n"
             "### Key Concepts\n"
-            "- List 4-6 important concepts or definitions from the material.\n\n"
+            "- **Concept name**: Explanation with `code` keywords highlighted.\n"
+            "- **Another concept**: Explanation with `code` keywords highlighted.\n\n"
             "### Review Focus\n"
-            "- List 2-3 items the student should pay attention to before taking the quiz.\n\n"
+            "- **Label**: Actionable item with `code` keywords where relevant.\n"
+            "- **Label**: Another actionable item with `code` keywords.\n\n"
             "Return only the study summary Markdown now:"
         )
         return self._make_request(prompt)
@@ -344,7 +359,7 @@ class MiniMaxProvider(AIProvider):
             f"Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes or 'N/A'}\n\n"
             'Return ONLY a valid JSON array. Each object: {{"question", "choices":{{"A","B","C","D"}}, "correct_answer", "topic"}}'
         )
-        raw = self._make_request(prompt, max_tokens=4096)
+        raw = self._make_request(prompt, max_tokens=4096, timeout=120)
 
         cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
         start = cleaned.find("[")
@@ -543,6 +558,17 @@ def get_generation_provider() -> MultiProvider:
     return _default_provider
 
 
+# ─── Cache helpers for AI-generated outputs ──────────────────────────────────
+
+
+def _get_content_hash(text: str) -> str:
+    return hashlib.md5(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _cache_key(prefix: str, chapter_id: Any, content_hash: str) -> str:
+    return f"quizsense:{prefix}:ch{chapter_id}:{content_hash}"
+
+
 def _process_summary_for_session(upload_session: UploadSession, timer=None) -> GenerationResult:
     chapter_title = (
         upload_session.chapter.title if upload_session.chapter else "Fundamentals of Programming"
@@ -563,6 +589,19 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
         return GenerationResult(
             success=False,
             error="No extracted text was available for summary generation.",
+            generation_type=GenerationType.SUMMARY,
+        )
+
+    chapter_id = upload_session.chapter_id or 0
+    cache_key = _cache_key("summary", chapter_id, _get_content_hash(all_text))
+    cached_summary = cache.get(cache_key)
+    if cached_summary:
+        _detail("Summary cache hit — returning cached result.")
+        upload_session.summary = cached_summary
+        upload_session.save(update_fields=["summary"])
+        return GenerationResult(
+            success=True,
+            data=cached_summary,
             generation_type=GenerationType.SUMMARY,
         )
 
@@ -593,6 +632,7 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
         _detail(f"AI response received: {len(result.data)} chars")
         upload_session.summary = result.data
         upload_session.save(update_fields=["summary"])
+        cache.set(cache_key, result.data, timeout=60 * 60 * 24 * 7)
     else:
         _detail(f"AI call failed: {result.error}")
 
@@ -606,7 +646,7 @@ def _map_reduce_summary(
     provider: MultiProvider,
     _detail,
 ) -> GenerationResult:
-    """Two-pass summary: extract concepts from sections, then synthesize."""
+    """Two-pass summary: extract concepts from sections IN PARALLEL, then synthesize."""
     total_len = len(all_text)
 
     # Calculate number of chunks based on document length (capped at 4)
@@ -624,25 +664,37 @@ def _map_reduce_summary(
         positions = [usable_start + step * i for i in range(num_chunks)]
 
     _detail(
-        f"Document is long ({total_len} chars) — using map-reduce with {len(positions)} sections..."
+        f"Document is long ({total_len} chars) — using map-reduce with {len(positions)} sections (PARALLEL)..."
     )
 
-    # ── MAP PHASE: Extract concepts from each section ─────────────────────────
-    concept_notes = []
-    for i, pos in enumerate(positions):
+    # ── MAP PHASE: Extract concepts from each section IN PARALLEL ─────────────
+    concept_notes = [None] * len(positions)
+
+    def _extract_worker(args):
+        i, pos = args
         chunk = all_text[pos : pos + chunk_size]
         pct = int((pos / total_len) * 100)
         _detail(f"MAP [{i + 1}/{len(positions)}] extracting concepts from ~{pct}% of document...")
-
         map_result = provider.extract_concepts(chunk)
-        if map_result.success:
-            concept_notes.append(
-                f"=== SECTION {i + 1} (position {pct}%) ===\n{map_result.data}\n"
-            )
-            _detail(f"MAP [{i + 1}/{len(positions)}] extracted {len(map_result.data)} chars")
-        else:
-            _detail(f"MAP [{i + 1}/{len(positions)}] failed: {map_result.error}")
-            # Continue with other sections even if one fails
+        return i, pct, map_result
+
+    with ThreadPoolExecutor(max_workers=min(4, len(positions))) as executor:
+        futures = [executor.submit(_extract_worker, (i, pos)) for i, pos in enumerate(positions)]
+        for future in as_completed(futures):
+            try:
+                i, pct, map_result = future.result()
+                if map_result.success:
+                    concept_notes[i] = (
+                        f"=== SECTION {i + 1} (position {pct}%) ===\n{map_result.data}\n"
+                    )
+                    _detail(f"MAP [{i + 1}/{len(positions)}] extracted {len(map_result.data)} chars")
+                else:
+                    _detail(f"MAP [{i + 1}/{len(positions)}] failed: {map_result.error}")
+            except Exception as exc:
+                _detail(f"MAP worker crashed: {exc}")
+
+    # Filter out failed (None) entries
+    concept_notes = [n for n in concept_notes if n is not None]
 
     if not concept_notes:
         return GenerationResult(
@@ -661,6 +713,9 @@ def _map_reduce_summary(
         _detail(f"REDUCE: final summary received ({len(reduce_result.data)} chars)")
         upload_session.summary = reduce_result.data
         upload_session.save(update_fields=["summary"])
+        chapter_id = upload_session.chapter_id or 0
+        cache_key = _cache_key("summary", chapter_id, _get_content_hash(all_text))
+        cache.set(cache_key, reduce_result.data, timeout=60 * 60 * 24 * 7)
     else:
         _detail(f"REDUCE: synthesis failed: {reduce_result.error}")
 
@@ -674,17 +729,43 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
         upload_session = UploadSession.objects.select_related("chapter").get(id=upload_session)
 
     chapter = upload_session.chapter
-
-    # ── Find or create the quiz object early so we can update status on any path ──
-    quiz = Quiz.objects.filter(upload_session=upload_session).order_by("-created_at").first()
-    if not quiz:
-        primary_file = upload_session.files.order_by("id").first()
-        quiz = Quiz.objects.create(
-            chapter=chapter,
-            upload_session=upload_session,
-            uploaded_file=primary_file,
-            status=Quiz.STATUS_PENDING,
+    if not chapter:
+        return GenerationResult(
+            success=False,
+            error="Quiz has no associated chapter.",
+            generation_type=GenerationType.QUIZ,
         )
+
+    # ── Lock the most recent quiz for this session to prevent race conditions ──
+    # when multiple generate_quiz_task Celery tasks run concurrently.
+    with transaction.atomic():
+        quiz = (
+            Quiz.objects
+            .filter(upload_session=upload_session)
+            .select_for_update(nowait=False)
+            .order_by("-created_at")
+            .first()
+        )
+        if not quiz:
+            primary_file = upload_session.files.order_by("id").first()
+            quiz = Quiz.objects.create(
+                chapter=chapter,
+                upload_session=upload_session,
+                uploaded_file=primary_file,
+                status=Quiz.STATUS_PROCESSING,
+            )
+        elif quiz.status == Quiz.STATUS_COMPLETED:
+            # Another task already finished this quiz — return it immediately.
+            logger.info("[QUIZ] Quiz %s already completed for session %s — returning existing.", quiz.id, upload_session.id)
+            return GenerationResult(
+                success=True,
+                data=quiz,
+                generation_type=GenerationType.QUIZ,
+            )
+        else:
+            # Ensure status is processing while we work.
+            quiz.status = Quiz.STATUS_PROCESSING
+            quiz.save(update_fields=["status"])
 
     def _fail(error_msg: str) -> GenerationResult:
         """Mark quiz as FAILED and return a failed GenerationResult."""
@@ -697,9 +778,6 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
             error=error_msg,
             generation_type=GenerationType.QUIZ,
         )
-
-    if not chapter:
-        return _fail("Quiz has no associated chapter.")
 
     # OPTIMIZATION: Build quiz context directly from uploaded chunks without re-embedding.
     # RAG semantic search isn't necessary for quiz generation — we want even coverage
@@ -745,11 +823,27 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
     )
 
     provider = get_generation_provider()
-    result = provider.generate_mcq(
-        rag_context.context_text,
-        chapter.title,
-        rag_context.cross_reference_notes,
+
+    # Check cache for previously generated quiz
+    quiz_cache_key = _cache_key(
+        "quiz", chapter.id, _get_content_hash(rag_context.context_text + chapter.title)
     )
+    cached_quiz_data = cache.get(quiz_cache_key)
+    if cached_quiz_data:
+        logger.info("[QUIZ] Cache hit for session %s — skipping AI call.", upload_session.id)
+        result = GenerationResult(
+            success=True,
+            data=cached_quiz_data,
+            generation_type=GenerationType.QUIZ,
+        )
+    else:
+        result = provider.generate_mcq(
+            rag_context.context_text,
+            chapter.title,
+            rag_context.cross_reference_notes,
+        )
+        if result.success and result.data:
+            cache.set(quiz_cache_key, result.data, timeout=60 * 60 * 24 * 7)
 
     if not result.success or not result.data:
         return _fail(result.error or "AI quiz generation returned no data.")
@@ -814,6 +908,26 @@ def _process_recommendations_for_attempt(
         for answer in answers
     ]
 
+    # Build deterministic cache key from answers
+    answer_signature = "|".join(
+        f"{qa['question'][:40]}:{qa['selected_answer']}:{qa['is_correct']}"
+        for qa in questions_with_answers
+    )
+    rec_cache_key = _cache_key(
+        "recommendations", attempt.quiz.chapter_id or 0, _get_content_hash(answer_signature)
+    )
+    cached_recommendation = cache.get(rec_cache_key)
+    if cached_recommendation:
+        logger.info("[REC] Cache hit for attempt %s — returning cached recommendation.", attempt.id)
+        attempt.ai_recommendation = cached_recommendation
+        attempt.recommendation_status = QuizAttempt.RECOMMENDATION_COMPLETED
+        attempt.save(update_fields=["ai_recommendation", "recommendation_status"])
+        return GenerationResult(
+            success=True,
+            data=cached_recommendation,
+            generation_type=GenerationType.RECOMMENDATIONS,
+        )
+
     provider = get_generation_provider()
     result = provider.generate_recommendations(attempt, questions_with_answers)
 
@@ -821,6 +935,7 @@ def _process_recommendations_for_attempt(
         attempt.ai_recommendation = result.data
         attempt.recommendation_status = QuizAttempt.RECOMMENDATION_COMPLETED
         attempt.save(update_fields=["ai_recommendation", "recommendation_status"])
+        cache.set(rec_cache_key, result.data, timeout=60 * 60 * 24 * 7)
 
     return result
 
@@ -1119,7 +1234,13 @@ def queue_recommendations_generation(attempt_id: int) -> None:
             )
             worker.start()
 
-    transaction.on_commit(dispatch)
+    # When called from inside a Celery task or view without an explicit
+    # transaction, on_commit may not fire. Detect and dispatch immediately.
+    from django.db import connection
+    if connection.in_atomic_block:
+        transaction.on_commit(dispatch)
+    else:
+        dispatch()
 
 
 def _generate_recommendations_thread(attempt_id: int) -> None:

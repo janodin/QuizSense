@@ -1,7 +1,7 @@
 """
 File processing service for QuizSense.
 Handles text extraction from PDF and Word files using:
-  - PyPDF2 for standard PDFs (file parsing)
+  - PyMuPDF (fitz) for standard PDFs (3-5x faster than PyPDF2)
   - python-docx for Word documents (file parsing)
   - pytesseract + Pillow + pdf2image for scanned/image-based PDFs (OCR)
 
@@ -14,7 +14,7 @@ import io
 import logging
 
 import docx
-import PyPDF2
+import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ OCR_MAX_PAGES = 10   # safety cap — each page = ~1-2 MB uncompressed in RAM
 def extract_text_from_pdf(file_obj):
     """
     Extract text from a PDF file.
-    First attempts standard file parsing via PyPDF2.
+    First attempts standard file parsing via PyMuPDF (fitz).
     If extracted text is too short (likely a scanned PDF),
     falls back to OCR using pytesseract (capped at OCR_MAX_PAGES pages).
     """
@@ -49,17 +49,20 @@ def extract_text_from_docx(file_obj):
 
 def _parse_pdf(file_obj):
     """
-    Standard PDF text extraction via PyPDF2.
+    Fast PDF text extraction via PyMuPDF (fitz).
+    Typically 3-5x faster than PyPDF2 for large documents.
     """
     text_parts = []
     try:
-        reader = PyPDF2.PdfReader(file_obj)
-        for page in reader.pages:
-            page_text = page.extract_text()
+        file_obj.seek(0)
+        doc = fitz.open(stream=file_obj.read(), filetype="pdf")
+        for page in doc:
+            page_text = page.get_text()
             if page_text:
                 text_parts.append(page_text)
+        doc.close()
     except Exception as e:
-        logger.warning("PyPDF2 extraction failed: %s", e)
+        logger.warning("PyMuPDF extraction failed: %s", e)
     return "\n".join(text_parts)
 
 

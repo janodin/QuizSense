@@ -289,8 +289,6 @@ def submit_quiz(request, quiz_id):
     )
 
     score = 0
-    questions_with_answers = []
-
     for question, selected in validated_answers:
         is_correct = selected == question.correct_answer
         if is_correct:
@@ -301,36 +299,23 @@ def submit_quiz(request, quiz_id):
             selected_answer=selected,
             is_correct=is_correct,
         )
-        questions_with_answers.append({
-            'question': question.text,
-            'correct_answer': question.correct_answer,
-            'selected_answer': selected,
-            'is_correct': is_correct,
-            'topic': question.topic.title if question.topic else 'General',
-        })
 
     attempt.score = score
     attempt.completed_at = timezone.now()
     attempt.save()
 
+    # Queue recommendations asynchronously so the user isn't blocked
+    # waiting for the AI API call (10-30s) before seeing results.
     try:
-        from .services.pipeline_service import _process_recommendations_for_attempt
-        result = _process_recommendations_for_attempt(attempt)
-        if result.success:
-            attempt.refresh_from_db()
-        else:
-            attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
-            attempt.recommendation_error = result.error or "Unknown error"
-            attempt.save(update_fields=["recommendation_status", "recommendation_error"])
-            messages.warning(request, "Quiz submitted, but study recommendations could not be generated.")
+        from .services.pipeline_service import queue_recommendations_generation
+        queue_recommendations_generation(attempt.id)
     except Exception as exc:
         import logging
         logger = logging.getLogger(__name__)
-        logger.warning("Recommendation generation failed for attempt %s: %s", attempt.id, exc)
+        logger.warning("Failed to queue recommendations for attempt %s: %s", attempt.id, exc)
         attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
         attempt.recommendation_error = str(exc)[:500]
         attempt.save(update_fields=["recommendation_status", "recommendation_error"])
-        messages.warning(request, "Quiz submitted, but study recommendations could not be generated.")
 
     return redirect('quiz_results', attempt_id=attempt.id)
 
@@ -354,5 +339,18 @@ def review_quiz(request, attempt_id):
         return HttpResponseForbidden("You do not have access to this review.")
     answers = attempt.answers.select_related('question').order_by('id')
     return render(request, 'quiz/review.html', {'attempt': attempt, 'answers': answers})
+
+
+def recommendation_status(request, attempt_id):
+    """Return recommendation generation status as JSON for polling."""
+    attempt = get_object_or_404(QuizAttempt, id=attempt_id)
+    if not _check_ownership(request, attempt):
+        return HttpResponseForbidden("You do not have access to this attempt.")
+
+    return JsonResponse({
+        'status': attempt.recommendation_status,
+        'error': attempt.recommendation_error or None,
+        'recommendation_html': attempt.ai_recommendation or None,
+    })
 
 

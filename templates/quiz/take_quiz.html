@@ -229,29 +229,31 @@ nextBtn.addEventListener('click', () => {
     }
 });
 
-document.getElementById('quizForm').addEventListener('submit', function (e) {
-    const all = new Set(Array.from(document.querySelectorAll('input.btn-check')).map(r => r.name));
-    const done = new Set(Array.from(document.querySelectorAll('input.btn-check:checked')).map(r => r.name));
-    for (const name of all) {
-        if (!done.has(name)) {
-            e.preventDefault();
-            document.getElementById('validation-message').classList.remove('d-none');
-            const el = document.querySelector(`input[name="${name}"]`);
-            if (el) {
-                activeIndex = Number(el.closest('.question-card').dataset.index);
-                refreshNavigation();
-                saveState();
-                const card = el.closest('.question-card');
-                const headerOffset = 100;
-                const elementPosition = card.getBoundingClientRect().top;
-                const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
-                window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
+    document.getElementById('quizForm').addEventListener('submit', function (e) {
+        const all = new Set(Array.from(document.querySelectorAll('input.btn-check')).map(r => r.name));
+        const done = new Set(Array.from(document.querySelectorAll('input.btn-check:checked')).map(r => r.name));
+        for (const name of all) {
+            if (!done.has(name)) {
+                e.preventDefault();
+                document.getElementById('validation-message').classList.remove('d-none');
+                const el = document.querySelector(`input[name="${name}"]`);
+                if (el) {
+                    activeIndex = Number(el.closest('.question-card').dataset.index);
+                    refreshNavigation();
+                    saveState();
+                    const card = el.closest('.question-card');
+                    const headerOffset = 100;
+                    const elementPosition = card.getBoundingClientRect().top;
+                    const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
+                    window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
+                }
+                return;
             }
-            return;
         }
-    }
-    localStorage.removeItem(STORAGE_KEY);
-});
+        localStorage.removeItem(STORAGE_KEY);
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Submitting Quiz...';
+    });
 
 loadState();
 updateProgress();

@@ -19,7 +19,10 @@ def process_upload_session_task(self, upload_session_id):
     Upload processing: extract text → chunk → embed → generate summary.
     Uses simplified sequential pipeline.
     """
+    from django.db import close_old_connections
     from .services.pipeline_service import process_upload_session_simple
+
+    close_old_connections()
 
     try:
         process_upload_session_simple(upload_session_id)
@@ -36,8 +39,11 @@ def generate_quiz_task(self, upload_session_id):
     Generate quiz for an upload session after summary is ready.
     Uses RAG to retrieve context and generates 10 MCQs via AI.
     """
-    from .models import Quiz
+    from django.db import close_old_connections
+    from .models import Quiz, UploadSession
     from .services.pipeline_service import _process_quiz_for_session
+
+    close_old_connections()
 
     try:
         result = _process_quiz_for_session(upload_session_id)
@@ -55,7 +61,7 @@ def generate_quiz_task(self, upload_session_id):
                 result.error,
             )
             try:
-                from .models import UploadSession
+                close_old_connections()
                 upload_session = UploadSession.objects.get(id=upload_session_id)
                 quiz = Quiz.objects.filter(upload_session=upload_session).order_by('-created_at').first()
                 if quiz and quiz.status == Quiz.STATUS_PROCESSING:
@@ -67,7 +73,7 @@ def generate_quiz_task(self, upload_session_id):
     except Exception as exc:
         logger.error("Quiz generation failed for session %s: %s", upload_session_id, exc)
         try:
-            from .models import UploadSession
+            close_old_connections()
             upload_session = UploadSession.objects.get(id=upload_session_id)
             quiz = Quiz.objects.filter(upload_session=upload_session).order_by('-created_at').first()
             if quiz:
@@ -81,13 +87,16 @@ def generate_quiz_task(self, upload_session_id):
         raise
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=120, soft_time_limit=90)
+@shared_task(bind=True, max_retries=2, default_retry_delay=120, time_limit=180, soft_time_limit=150)
 def generate_recommendations_task(self, attempt_id):
     """
     Generate AI study recommendations for a completed quiz attempt.
     """
+    from django.db import close_old_connections
     from .models import QuizAttempt
     from .services.pipeline_service import generate_recommendations_for_attempt
+
+    close_old_connections()
 
     try:
         result = generate_recommendations_for_attempt(attempt_id)
@@ -103,9 +112,10 @@ def generate_recommendations_task(self, attempt_id):
             attempt_id,
             exc,
         )
+        close_old_connections()
         attempt = QuizAttempt.objects.get(id=attempt_id)
         attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
-        attempt.recommendation_error = str(exc)
+        attempt.recommendation_error = str(exc)[:500]
         attempt.save(update_fields=["recommendation_status", "recommendation_error"])
 
         if self.request.retries < self.max_retries:
