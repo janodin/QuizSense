@@ -98,13 +98,3 @@ class ProcessingTimer:
             elapsed,
             message,
         )
-
-
-def log_summary(session_id, results):
-    """Log a summary of all timings at the end of processing."""
-    logger = _get_logger()
-    logger.info("=" * 70)
-    logger.info("[SESSION %s] PROCESSING COMPLETE", session_id)
-    for step, duration in results.items():
-        logger.info("[SESSION %s]   %-30s %.2fs", session_id, step, duration)
-    logger.info("=" * 70)

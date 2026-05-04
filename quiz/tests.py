@@ -6,6 +6,9 @@ Run with:
   python manage.py test quiz.tests.ChunkingServiceTest --settings=quizsense.settings  (no DB)
 """
 
+import json
+import re
+
 from django.test import TestCase, RequestFactory, override_settings
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import HttpResponseForbidden
@@ -19,7 +22,21 @@ from quiz.views import (
     quiz_results,
     review_quiz,
 )
-from quiz.services.minimax_service import _parse_mcq_response
+
+
+def _parse_mcq_response(raw):
+    """Parse MCQ JSON response from AI. Copied from legacy minimax_service.py."""
+    cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start == -1 or end == -1:
+        raise ValueError(f"AI Response parsing failed. Raw starts with: {raw[:50]}")
+
+    try:
+        questions = json.loads(cleaned[start:end + 1])
+        return questions[:10]
+    except Exception as e:
+        raise ValueError(f"JSON Parse Error: {e}")
 
 
 # ---------------------------------------------------------------------------

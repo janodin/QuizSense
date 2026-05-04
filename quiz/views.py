@@ -7,7 +7,6 @@ from .forms import MultiFileUploadForm
 from .services.pipeline_service import (
     queue_upload_session_processing,
     queue_quiz_generation,
-    queue_recommendations_generation,
 )
 
 

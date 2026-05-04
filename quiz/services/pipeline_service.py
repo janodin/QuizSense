@@ -14,7 +14,6 @@ Key functions:
 All use MiniMax M2.7 as primary AI provider with Gemini fallback.
 """
 
-import gc
 import logging
 import time
 import threading
@@ -47,23 +46,6 @@ class GenerationType(Enum):
     SUMMARY = "summary"
     QUIZ = "quiz"
     RECOMMENDATIONS = "recommendations"
-
-
-class GenerationStatus(Enum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-@dataclass
-class GenerationRequest:
-    type: GenerationType
-    upload_session: Optional[UploadSession] = None
-    quiz_attempt: Optional[QuizAttempt] = None
-    chapter: Optional[Chapter] = None
-    chapter_title: str = "Programming Fundamentals"
-    priority: int = 0
 
 
 @dataclass
@@ -409,18 +391,10 @@ class MiniMaxProvider(AIProvider):
 class MultiProvider:
     def __init__(self):
         self._providers: list[AIProvider] = []
-        self._current_index = 0
 
     def add_provider(self, provider: AIProvider) -> "MultiProvider":
         self._providers.append(provider)
         return self
-
-    def _get_next_provider(self) -> tuple[AIProvider, int]:
-        if not self._providers:
-            raise ValueError("No AI providers configured")
-        idx = self._current_index % len(self._providers)
-        self._current_index += 1
-        return self._providers[idx], idx
 
     def generate_summary(
         self, text: str, chapter_title: str, cross_reference_notes: str
@@ -567,18 +541,6 @@ def get_generation_provider() -> MultiProvider:
                     MiniMaxProvider()
                 ).add_provider(GeminiProvider())
     return _default_provider
-
-
-def _build_rag_context(
-    upload_session: UploadSession, mode: str = "summary"
-) -> GenerationContext:
-    bundle = retrieve_context_for_session(upload_session, mode=mode)
-    return GenerationContext(
-        context_text=bundle.get("context_text", ""),
-        cross_reference_notes=bundle.get("cross_reference_notes", ""),
-        session_chunks=bundle.get("session_chunks", []),
-        textbook_chunks=bundle.get("textbook_chunks", []),
-    )
 
 
 def _process_summary_for_session(upload_session: UploadSession, timer=None) -> GenerationResult:
@@ -989,7 +951,6 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
                 ]
             )
 
-        gc.collect()
         logger.info("[SESSION %s] Processing completed in %.1fs", upload_session_id, total_elapsed)
         return results
 
@@ -1112,20 +1073,6 @@ def _generate_quiz_thread(upload_session_id: int) -> None:
         close_old_connections()
 
 
-def generate_quiz_for_session(upload_session_id: int) -> Optional[Quiz]:
-    upload_session = UploadSession.objects.select_related("chapter").get(id=upload_session_id)
-
-    if upload_session.processing_status != UploadSession.STATUS_COMPLETED:
-        logger.info(
-            "Skipping quiz generation for upload session %s because summary is not ready.",
-            upload_session_id,
-        )
-        return None
-
-    result = _process_quiz_for_session(upload_session)
-    return result.data if result.success else None
-
-
 def generate_recommendations_for_attempt(attempt_id: int) -> GenerationResult:
     attempt = QuizAttempt.objects.select_related("quiz", "quiz__chapter").get(id=attempt_id)
     attempt.recommendation_status = QuizAttempt.RECOMMENDATION_PROCESSING
@@ -1181,15 +1128,3 @@ def _generate_recommendations_thread(attempt_id: int) -> None:
         generate_recommendations_for_attempt(attempt_id)
     finally:
         close_old_connections()
-
-
-def run_full_pipeline(upload_session_id: int) -> dict:
-    results = process_upload_session_simple(upload_session_id)
-
-    if results["summary"] and results["summary"].success:
-        quiz_result = _process_quiz_for_session(
-            UploadSession.objects.get(id=upload_session_id)
-        )
-        results["quiz"] = quiz_result
-
-    return results

@@ -115,12 +115,56 @@
 {% block extra_js %}
 <script>
 const totalQ = {{ questions|length }};
+const quizId = {{ quiz.id }};
+const STORAGE_KEY = `quizsense_quiz_${quizId}`;
 let activeIndex = 0;
 const cards = Array.from(document.querySelectorAll('.question-card'));
 const chips = Array.from(document.querySelectorAll('.q-chip'));
 const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 const submitBtn = document.getElementById('submitBtn');
+
+function loadState() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        if (saved) {
+            if (saved.answers) {
+                for (const [name, value] of Object.entries(saved.answers)) {
+                    const radio = document.querySelector(`input[name="${name}"][value="${value}"]`);
+                    if (radio) radio.checked = true;
+                }
+            }
+            if (typeof saved.activeIndex === 'number' && saved.activeIndex < totalQ) {
+                activeIndex = saved.activeIndex;
+            }
+        }
+    } catch (e) { /* ignore corrupt data */ }
+}
+
+function saveState() {
+    const answers = {};
+    document.querySelectorAll('input.btn-check:checked').forEach(r => {
+        answers[r.name] = r.value;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeIndex, answers }));
+}
+
+function syncChipVisuals() {
+    document.querySelectorAll('input.btn-check').forEach(radio => {
+        const label = document.querySelector(`label[for="${radio.id}"]`);
+        if (label) {
+            label.classList.toggle('selected', radio.checked);
+        }
+    });
+    const chipsWithAnswer = new Set(
+        Array.from(document.querySelectorAll('input.btn-check:checked')).map(r => {
+            return Number(r.closest('.question-card').dataset.index);
+        })
+    );
+    chips.forEach((chip, idx) => {
+        chip.classList.toggle('answered', chipsWithAnswer.has(idx));
+    });
+}
 
 function refreshNavigation() {
     cards.forEach((card, idx) => card.classList.toggle('d-none', idx !== activeIndex));
@@ -138,6 +182,7 @@ function refreshNavigation() {
     const isLast = activeIndex === totalQ - 1;
     nextBtn.classList.toggle('d-none', isLast);
     submitBtn.classList.toggle('d-none', !isLast);
+    syncChipVisuals();
 }
 
 function updateProgress() {
@@ -150,10 +195,8 @@ function updateProgress() {
 
 document.querySelectorAll('input.btn-check').forEach(r => r.addEventListener('change', function () {
     updateProgress();
-    const card = this.closest('.question-card');
-    const idx = Number(card.dataset.index);
-    const chip = chips[idx];
-    chip.classList.add('answered');
+    syncChipVisuals();
+    saveState();
     document.getElementById('validation-message').classList.add('d-none');
 }));
 
@@ -161,6 +204,7 @@ chips.forEach((chip) => {
     chip.addEventListener('click', () => {
         activeIndex = Number(chip.dataset.jump);
         refreshNavigation();
+        saveState();
         const card = cards[activeIndex];
         const headerOffset = 100;
         const elementPosition = card.getBoundingClientRect().top;
@@ -173,6 +217,7 @@ prevBtn.addEventListener('click', () => {
     if (activeIndex > 0) {
         activeIndex -= 1;
         refreshNavigation();
+        saveState();
     }
 });
 
@@ -180,6 +225,7 @@ nextBtn.addEventListener('click', () => {
     if (activeIndex < totalQ - 1) {
         activeIndex += 1;
         refreshNavigation();
+        saveState();
     }
 });
 
@@ -194,6 +240,7 @@ document.getElementById('quizForm').addEventListener('submit', function (e) {
             if (el) {
                 activeIndex = Number(el.closest('.question-card').dataset.index);
                 refreshNavigation();
+                saveState();
                 const card = el.closest('.question-card');
                 const headerOffset = 100;
                 const elementPosition = card.getBoundingClientRect().top;
@@ -203,19 +250,10 @@ document.getElementById('quizForm').addEventListener('submit', function (e) {
             return;
         }
     }
+    localStorage.removeItem(STORAGE_KEY);
 });
 
-    if (num >= 1 && num <= totalQ) {
-        activeIndex = num - 1;
-        refreshNavigation();
-        const card = cards[activeIndex];
-        const headerOffset = 100;
-        const elementPosition = card.getBoundingClientRect().top;
-        const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
-        window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
-    }
-});
-
+loadState();
 updateProgress();
 refreshNavigation();
 </script>

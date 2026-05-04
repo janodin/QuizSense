@@ -107,16 +107,6 @@ h1, h2, h3, h4, h5, h6 {
     padding: 1.25rem;
 }
 
-/* Card variants */
-.card.border-highlight {
-    border-left: 4px solid var(--qs-primary);
-}
-
-.card-hover-lift:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--qs-shadow-lg);
-}
-
 /* ---------------------------------------------------
    Buttons - Refined, consistent styling
    --------------------------------------------------- */
@@ -485,48 +475,6 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* ---------------------------------------------------
-   Score Circle
-   --------------------------------------------------- */
-
-.score-circle {
-    width: 160px;
-    height: 160px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto;
-    position: relative;
-    box-shadow: var(--qs-shadow-lg);
-}
-
-.score-circle::before {
-    content: '';
-    position: absolute;
-    inset: 6px;
-    border-radius: 50%;
-    background: var(--qs-surface);
-}
-
-.score-circle .score-content {
-    position: relative;
-    z-index: 1;
-    text-align: center;
-    color: inherit;
-}
-
-.score-circle .score-percent {
-    font-size: 2.75rem;
-    font-weight: 700;
-    line-height: 1;
-}
-
-.score-circle .score-detail {
-    font-size: 0.9rem;
-    opacity: 0.85;
-}
-
-/* ---------------------------------------------------
    Navigation & Sidebar
    --------------------------------------------------- */
 
@@ -580,44 +528,6 @@ h1, h2, h3, h4, h5, h6 {
 
 .question-card.incorrect {
     border-left: 4px solid #dc3545;
-}
-
-/* ---------------------------------------------------
-   Topic performance bars
-   --------------------------------------------------- */
-
-.topic-bar {
-    margin-bottom: 1rem;
-}
-
-.topic-bar-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.4rem;
-}
-
-.topic-bar-title {
-    font-weight: 600;
-    font-size: 0.875rem;
-}
-
-.topic-bar-value {
-    font-size: 0.8rem;
-    font-weight: 500;
-}
-
-.topic-bar-track {
-    height: 10px;
-    border-radius: 999px;
-    background: var(--qs-border);
-    overflow: hidden;
-}
-
-.topic-bar-fill {
-    height: 100%;
-    border-radius: 999px;
-    transition: width 0.6s ease;
 }
 
 /* ---------------------------------------------------
@@ -800,13 +710,6 @@ h1, h2, h3, h4, h5, h6 {
     color: var(--qs-primary);
 }
 
-.text-gradient {
-    background: linear-gradient(135deg, var(--qs-primary) 0%, var(--qs-primary-dark) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
 /* ---------------------------------------------------
    Footer
    --------------------------------------------------- */
@@ -847,19 +750,6 @@ h1, h2, h3, h4, h5, h6 {
 
     .upload-zone {
         padding: 1.25rem 1rem;
-    }
-
-    .score-circle {
-        width: 130px;
-        height: 130px;
-    }
-
-    .score-circle .score-percent {
-        font-size: 2.25rem;
-    }
-
-    .main-content {
-        padding-top: 1.5rem;
     }
 }
 

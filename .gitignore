@@ -9,9 +9,6 @@ media/
 dataset/
 venv/
 .venv/
-
-venv/
-.venv/
 *.egg-info/
 dist/
 

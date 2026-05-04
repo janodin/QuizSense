@@ -4,7 +4,7 @@ import json
 
 
 class VectorEmbedding(models.TextField):
-    """Store a 1536-dim embedding as JSON text. Works with SQLite + numpy or PostgreSQL + pgvector."""
+    """Store an embedding vector as JSON text in the database."""
 
     def from_db_value(self, value, expression, connection):
         if value is None:
@@ -142,9 +142,6 @@ class QuizAttempt(models.Model):
         if self.total_questions == 0:
             return 0
         return round((self.score / self.total_questions) * 100)
-
-    def incorrect_count(self):
-        return self.total_questions - self.score
 
     def save(self, *args, **kwargs):
         if self.score > self.total_questions:

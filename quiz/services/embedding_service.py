@@ -76,12 +76,23 @@ def _get_model():
                 _touch()
                 return _transformer_model
 
+        import os
         import torch
         from sentence_transformers import SentenceTransformer
 
         torch.set_num_threads(MAX_CPU_THREADS)
 
-        model = SentenceTransformer("all-MiniLM-L6-v2")
+        # Read HF token from environment for authenticated HuggingFace requests
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if hf_token:
+            logger.info("HF_TOKEN found — using authenticated HuggingFace requests.")
+        else:
+            logger.warning("HF_TOKEN not found — using unauthenticated HuggingFace requests.")
+
+        model = SentenceTransformer(
+            "all-MiniLM-L6-v2",
+            token=hf_token,
+        )
 
         try:
             # Dynamic int8 quantization shrinks the model ~40% with negligible
@@ -148,94 +159,6 @@ def _set_cached_embedding(text: str, embedding: list) -> None:
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────
-
-def embed_texts(texts):
-    """
-    Generate embeddings using sentence-transformers.
-    Returns list of 384-dim float lists.
-
-    Memory guard: processes in batches of BATCH_SIZE and runs GC between
-    batches so peak numpy/Torch memory never exceeds ~BATCH_SIZE × embedding.
-    """
-    if not texts:
-        return []
-
-    # Check cache first
-    results = [None] * len(texts)
-    missing_indices = []
-    missing_texts = []
-
-    for i, text in enumerate(texts):
-        cached = _get_cached_embedding(text)
-        if cached is not None:
-            results[i] = cached
-        else:
-            missing_indices.append(i)
-            missing_texts.append(text)
-
-    if not missing_texts:
-        return results
-
-    model = _get_model()
-    _touch()
-
-    for i in range(0, len(missing_texts), BATCH_SIZE):
-        batch = missing_texts[i : i + BATCH_SIZE]
-        vectors = model.encode(batch, normalize_embeddings=True)
-        for idx_in_batch, v in enumerate(vectors):
-            embedding = v.tolist()
-            original_idx = missing_indices[i + idx_in_batch]
-            results[original_idx] = embedding
-            _set_cached_embedding(missing_texts[i + idx_in_batch], embedding)
-        del vectors
-        gc.collect()
-
-    _maybe_unload()
-    return results
-
-
-def embed_texts_batched(texts, batch_size=None):
-    """
-    Generate embeddings in batches — useful for large textbook ingestion.
-    Returns list of 384-dim float lists.
-    """
-    if not texts:
-        return []
-
-    batch_size = batch_size or BATCH_SIZE
-
-    # Check cache first
-    results = [None] * len(texts)
-    missing_indices = []
-    missing_texts = []
-
-    for i, text in enumerate(texts):
-        cached = _get_cached_embedding(text)
-        if cached is not None:
-            results[i] = cached
-        else:
-            missing_indices.append(i)
-            missing_texts.append(text)
-
-    if not missing_texts:
-        return results
-
-    model = _get_model()
-    _touch()
-
-    for i in range(0, len(missing_texts), batch_size):
-        batch = missing_texts[i : i + batch_size]
-        vectors = model.encode(batch, normalize_embeddings=True)
-        for idx_in_batch, v in enumerate(vectors):
-            embedding = v.tolist()
-            original_idx = missing_indices[i + idx_in_batch]
-            results[original_idx] = embedding
-            _set_cached_embedding(missing_texts[i + idx_in_batch], embedding)
-        del vectors
-
-    _maybe_unload()
-    return results
-
 
 def embed_texts_batched(texts, batch_size=None):
     """
