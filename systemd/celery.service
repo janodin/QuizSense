@@ -6,10 +6,10 @@ After=network.target redis.service
 User=root
 Group=www-data
 WorkingDirectory=/opt/quizsense
-Environment="PATH=/opt/quizsense/venv/bin"
+Environment="PATH=/opt/quizsense/.venv/bin"
 Environment="DJANGO_SETTINGS_MODULE=quizsense.settings"
 Environment="PYTHONPATH=/opt/quizsense"
-ExecStart=/opt/quizsense/venv/bin/celery -A quizsense worker --loglevel=info --max-tasks-per-child=10
+ExecStart=/opt/quizsense/.venv/bin/celery -A quizsense worker --loglevel=info --max-tasks-per-child=10
 ExecReload=/bin/kill -s HUP $MAINPID
 KillMode=mixed
 TimeoutStopSec=5
