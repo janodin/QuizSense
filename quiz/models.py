@@ -197,10 +197,19 @@ class TextbookChunk(models.Model):
     chunk_index = models.PositiveIntegerField()
     content = models.TextField()
     embedding = VectorEmbedding(null=True, blank=True)
+    embedding_version = models.PositiveSmallIntegerField(
+        default=1, help_text="Version of the embedding model/strategy used"
+    )
+    source_hash = models.CharField(
+        max_length=32, blank=True, help_text="MD5 hash of source file for change detection"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['chapter__number', 'source_title', 'chunk_index']
+        indexes = [
+            models.Index(fields=['source_title', 'embedding_version', 'source_hash']),
+        ]
 
     def __str__(self):
         return f"TextbookChunk {self.source_title}#{self.chunk_index}"
@@ -220,4 +229,38 @@ class UploadedChunk(models.Model):
 
     def __str__(self):
         return f"UploadedChunk session={self.upload_session_id} file={self.uploaded_file_id}#{self.chunk_index}"
+
+
+class GenerationMetric(models.Model):
+    GENERATION_TYPE_CHOICES = [
+        ('summary', 'Summary'),
+        ('quiz', 'Quiz'),
+        ('recommendations', 'Recommendations'),
+        ('concept_extraction', 'Concept Extraction'),
+    ]
+    PROVIDER_CHOICES = [
+        ('minimax', 'MiniMax'),
+        ('gemini', 'Gemini'),
+    ]
+
+    generation_type = models.CharField(max_length=30, choices=GENERATION_TYPE_CHOICES)
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES, blank=True)
+    success = models.BooleanField(default=False)
+    duration_ms = models.FloatField(default=0)
+    cache_hit = models.BooleanField(default=False)
+    error_message = models.TextField(blank=True, null=True)
+    related_attempt = models.ForeignKey(QuizAttempt, on_delete=models.SET_NULL, null=True, blank=True)
+    related_session = models.ForeignKey(UploadSession, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['generation_type', 'created_at']),
+            models.Index(fields=['provider', 'created_at']),
+            models.Index(fields=['success', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.generation_type} — {self.provider or 'N/A'} — {'SUCCESS' if self.success else 'FAIL'}"
 

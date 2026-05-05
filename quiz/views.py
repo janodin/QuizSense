@@ -2,7 +2,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponseForbidden, JsonResponse
 from django.contrib import messages
 from django.utils import timezone
-from .models import Chapter, Topic, UploadSession, UploadedFile, Question, Quiz, QuizAttempt, QuizAnswer
+from django.db.models import Avg, Count, Q, F, StdDev, FloatField
+from django.db.models.functions import Cast
+from .models import Chapter, Topic, UploadSession, UploadedFile, Question, Quiz, QuizAttempt, QuizAnswer, TextbookChunk, UploadedChunk, GenerationMetric
 from .forms import MultiFileUploadForm
 from .services.pipeline_service import (
     queue_upload_session_processing,
@@ -352,5 +354,257 @@ def recommendation_status(request, attempt_id):
         'error': attempt.recommendation_error or None,
         'recommendation_html': attempt.ai_recommendation or None,
     })
+
+
+def evaluation(request):
+    """
+    Evaluation dashboard for RAG and Model accuracy.
+    Presents transparent, research-oriented metrics.
+    """
+    # ─── RAG Metrics ──────────────────────────────────────────────────────────
+    total_textbook_chunks = TextbookChunk.objects.count()
+    total_uploaded_chunks = UploadedChunk.objects.count()
+    total_chunks = total_textbook_chunks + total_uploaded_chunks
+
+    textbook_chunks_with_embeddings = TextbookChunk.objects.exclude(embedding=None).exclude(embedding=[]).count()
+    uploaded_chunks_with_embeddings = UploadedChunk.objects.exclude(embedding=None).exclude(embedding=[]).count()
+
+    embedding_coverage = 0
+    if total_chunks > 0:
+        embedding_coverage = ((textbook_chunks_with_embeddings + uploaded_chunks_with_embeddings) / total_chunks) * 100
+
+    avg_chunks_per_session = 0
+    session_count = UploadSession.objects.count()
+    if session_count > 0:
+        avg_chunks_per_session = total_uploaded_chunks / session_count
+
+    # Topic coverage in textbook chunks
+    topic_coverage = TextbookChunk.objects.exclude(topic=None).count()
+    topic_coverage_pct = 0
+    if total_textbook_chunks > 0:
+        topic_coverage_pct = (topic_coverage / total_textbook_chunks) * 100
+
+    # ─── Model / Generation Metrics ───────────────────────────────────────────
+    total_quizzes = Quiz.objects.count()
+    quizzes_completed = Quiz.objects.filter(status=Quiz.STATUS_COMPLETED).count()
+    quizzes_failed = Quiz.objects.filter(status=Quiz.STATUS_FAILED).count()
+    quizzes_pending = Quiz.objects.filter(status__in=[Quiz.STATUS_PENDING, Quiz.STATUS_PROCESSING]).count()
+
+    quiz_success_rate = 0
+    if total_quizzes > 0:
+        quiz_success_rate = (quizzes_completed / total_quizzes) * 100
+
+    total_sessions = UploadSession.objects.count()
+    sessions_completed = UploadSession.objects.filter(processing_status=UploadSession.STATUS_COMPLETED).count()
+    sessions_failed = UploadSession.objects.filter(processing_status=UploadSession.STATUS_FAILED).count()
+
+    summary_success_rate = 0
+    if total_sessions > 0:
+        summary_success_rate = (sessions_completed / total_sessions) * 100
+
+    total_attempts = QuizAttempt.objects.count()
+    recs_completed = QuizAttempt.objects.filter(recommendation_status=QuizAttempt.RECOMMENDATION_COMPLETED).count()
+    recs_failed = QuizAttempt.objects.filter(recommendation_status=QuizAttempt.RECOMMENDATION_FAILED).count()
+
+    rec_success_rate = 0
+    if total_attempts > 0:
+        rec_success_rate = (recs_completed / total_attempts) * 100
+
+    # Average questions per completed quiz
+    avg_questions_per_quiz = 0
+    completed_quizzes = Quiz.objects.filter(status=Quiz.STATUS_COMPLETED).prefetch_related('questions')
+    if completed_quizzes.exists():
+        total_questions = sum(q.questions.count() for q in completed_quizzes)
+        avg_questions_per_quiz = total_questions / completed_quizzes.count()
+
+    # Question topic distribution
+    topic_distribution = []
+    topic_data = (
+        Question.objects.exclude(topic=None)
+        .values('topic__title')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:10]
+    )
+    for item in topic_data:
+        topic_distribution.append({
+            'topic': item['topic__title'],
+            'count': item['count'],
+        })
+
+    # ─── User Performance Metrics (proxy for question quality) ────────────────
+    avg_score = QuizAttempt.objects.aggregate(avg=Avg('score'))['avg'] or 0
+    avg_total = QuizAttempt.objects.aggregate(avg=Avg('total_questions'))['avg'] or 10
+    avg_score_pct = 0
+    if avg_total > 0:
+        avg_score_pct = (avg_score / avg_total) * 100
+
+    score_distribution = (
+        QuizAttempt.objects.annotate(
+            pct=Cast(F('score'), FloatField()) / Cast(F('total_questions'), FloatField()) * 100
+        )
+        .values('pct')
+        .annotate(count=Count('id'))
+        .order_by('pct')
+    )
+
+    # Bucket scores into ranges for charting
+    score_buckets = {'0_20': 0, '21_40': 0, '41_60': 0, '61_80': 0, '81_100': 0}
+    for item in score_distribution:
+        pct = item['pct'] or 0
+        if pct <= 20:
+            score_buckets['0_20'] += item['count']
+        elif pct <= 40:
+            score_buckets['21_40'] += item['count']
+        elif pct <= 60:
+            score_buckets['41_60'] += item['count']
+        elif pct <= 80:
+            score_buckets['61_80'] += item['count']
+        else:
+            score_buckets['81_100'] += item['count']
+
+    # Topic-wise accuracy
+    topic_accuracy = []
+    topic_perf_data = (
+        QuizAnswer.objects.filter(question__topic__isnull=False)
+        .values('question__topic__title')
+        .annotate(
+            total=Count('id'),
+            correct=Count('id', filter=Q(is_correct=True)),
+        )
+        .order_by('-total')[:10]
+    )
+    for item in topic_perf_data:
+        total = item['total']
+        correct = item['correct']
+        accuracy = (correct / total * 100) if total > 0 else 0
+        topic_accuracy.append({
+            'topic': item['question__topic__title'],
+            'total': total,
+            'correct': correct,
+            'accuracy': round(accuracy, 1),
+        })
+
+    # ─── Performance / Timing Metrics ─────────────────────────────────────────
+    # Average processing time for upload sessions (computed in Python for
+    # database compatibility — SQLite does not support interval→float casts).
+    sessions_with_timing = UploadSession.objects.filter(
+        processing_started_at__isnull=False,
+        processing_completed_at__isnull=False,
+    )
+    durations = []
+    for session in sessions_with_timing:
+        delta = session.processing_completed_at - session.processing_started_at
+        durations.append(delta.total_seconds())
+    avg_processing_time = sum(durations) / len(durations) if durations else 0
+
+    # GenerationMetric stats (if any recorded)
+    metric_stats = {}
+    if GenerationMetric.objects.exists():
+        for gtype, label in GenerationMetric.GENERATION_TYPE_CHOICES:
+            qs = GenerationMetric.objects.filter(generation_type=gtype)
+            metric_stats[gtype] = {
+                'total': qs.count(),
+                'success_rate': (qs.filter(success=True).count() / qs.count() * 100) if qs.exists() else 0,
+                'avg_duration': qs.aggregate(avg=Avg('duration_ms'))['avg'] or 0,
+                'cache_hit_rate': (qs.filter(cache_hit=True).count() / qs.count() * 100) if qs.exists() else 0,
+            }
+
+    # Provider distribution from GenerationMetric
+    provider_distribution = []
+    if GenerationMetric.objects.exists():
+        provider_data = (
+            GenerationMetric.objects.exclude(provider='')
+            .values('provider')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        for item in provider_data:
+            provider_distribution.append({
+                'provider': item['provider'].title(),
+                'count': item['count'],
+            })
+
+    # ─── Error Analysis ───────────────────────────────────────────────────────
+    quiz_errors = (
+        Quiz.objects.filter(status=Quiz.STATUS_FAILED, error_message__isnull=False)
+        .exclude(error_message='')
+        .values('error_message')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:5]
+    )
+
+    session_errors = (
+        UploadSession.objects.filter(processing_status=UploadSession.STATUS_FAILED, processing_error__isnull=False)
+        .exclude(processing_error='')
+        .values('processing_error')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:5]
+    )
+
+    # ─── Overall System Accuracy Score ────────────────────────────────────────
+    # Composite score: weighted average of component success rates
+    components = []
+    if total_sessions > 0:
+        components.append(summary_success_rate)
+    if total_quizzes > 0:
+        components.append(quiz_success_rate)
+    if total_attempts > 0:
+        components.append(rec_success_rate)
+
+    overall_system_accuracy = 0
+    if components:
+        overall_system_accuracy = sum(components) / len(components)
+
+    context = {
+        # RAG
+        'total_textbook_chunks': total_textbook_chunks,
+        'total_uploaded_chunks': total_uploaded_chunks,
+        'total_chunks': total_chunks,
+        'textbook_chunks_with_embeddings': textbook_chunks_with_embeddings,
+        'uploaded_chunks_with_embeddings': uploaded_chunks_with_embeddings,
+        'embedding_coverage': round(embedding_coverage, 1),
+        'avg_chunks_per_session': round(avg_chunks_per_session, 1),
+        'topic_coverage_pct': round(topic_coverage_pct, 1),
+
+        # Model Generation
+        'total_quizzes': total_quizzes,
+        'quizzes_completed': quizzes_completed,
+        'quizzes_failed': quizzes_failed,
+        'quizzes_pending': quizzes_pending,
+        'quiz_success_rate': round(quiz_success_rate, 1),
+        'total_sessions': total_sessions,
+        'sessions_completed': sessions_completed,
+        'sessions_failed': sessions_failed,
+        'summary_success_rate': round(summary_success_rate, 1),
+        'total_attempts': total_attempts,
+        'recs_completed': recs_completed,
+        'recs_failed': recs_failed,
+        'rec_success_rate': round(rec_success_rate, 1),
+        'avg_questions_per_quiz': round(avg_questions_per_quiz, 1),
+        'topic_distribution': topic_distribution,
+
+        # User Performance
+        'avg_score': round(avg_score, 2),
+        'avg_total': round(avg_total, 1),
+        'avg_score_pct': round(avg_score_pct, 1),
+        'score_buckets': score_buckets,
+        'topic_accuracy': topic_accuracy,
+
+        # Performance
+        'avg_processing_time': round(avg_processing_time, 2),
+        'metric_stats': metric_stats,
+        'provider_distribution': provider_distribution,
+
+        # Errors
+        'quiz_errors': list(quiz_errors),
+        'session_errors': list(session_errors),
+
+        # Overall
+        'overall_system_accuracy': round(overall_system_accuracy, 1),
+        'has_generation_metrics': GenerationMetric.objects.exists(),
+    }
+
+    return render(request, 'quiz/evaluation.html', context)
+
 
 

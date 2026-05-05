@@ -1,0 +1,688 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Evaluation Dashboard — QuizSense{% endblock %}
+
+{% block extra_css %}
+<style>
+  .eval-hero {
+    background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+    color: #fff;
+    border-radius: 1rem;
+    padding: 2.5rem 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 8px 24px rgba(13, 110, 253, 0.2);
+  }
+  .eval-hero h1 {
+    font-weight: 800;
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+  }
+  .eval-hero p {
+    opacity: 0.9;
+    margin-bottom: 0;
+    max-width: 700px;
+  }
+  .metric-card {
+    background: #fff;
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    border: 1px solid #e9ecef;
+    height: 100%;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+  }
+  .metric-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #0d6efd;
+    line-height: 1.2;
+  }
+  .metric-label {
+    font-size: 0.875rem;
+    color: #6c757d;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .section-header {
+    font-weight: 700;
+    font-size: 1.35rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #e9ecef;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .methodology-box {
+    background: #f8f9fa;
+    border-left: 4px solid #0d6efd;
+    padding: 1rem 1.25rem;
+    border-radius: 0 0.5rem 0.5rem 0;
+    font-size: 0.95rem;
+    color: #495057;
+  }
+  .chart-container {
+    position: relative;
+    height: 300px;
+    width: 100%;
+  }
+  .accuracy-gauge {
+    width: 140px;
+    height: 140px;
+    margin: 0 auto;
+  }
+  .data-table th {
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #f8f9fa;
+  }
+  .data-table td, .data-table th {
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+  }
+  .badge-custom {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.35em 0.65em;
+    border-radius: 0.375rem;
+  }
+  .empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: #6c757d;
+  }
+  .empty-state i {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    display: block;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Hero Section -->
+<div class="eval-hero">
+  <h1><i class="bi bi-graph-up-arrow me-2"></i>System Evaluation Dashboard</h1>
+  <p>
+    Transparent, research-oriented metrics for evaluating RAG retrieval accuracy
+    and LLM generation quality. All calculations are performed directly from
+    system data with methodology disclosed below each section.
+  </p>
+</div>
+
+<!-- Overall Accuracy Score -->
+<div class="row g-4 mb-5">
+  <div class="col-md-4">
+    <div class="metric-card text-center">
+      <div class="metric-label mb-2">Overall System Accuracy</div>
+      <div class="metric-value">{{ overall_system_accuracy }}%</div>
+      <small class="text-muted">Weighted mean of pipeline success rates</small>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="metric-card text-center">
+      <div class="metric-label mb-2">Embedding Coverage</div>
+      <div class="metric-value">{{ embedding_coverage }}%</div>
+      <small class="text-muted">Chunks with computed embeddings</small>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="metric-card text-center">
+      <div class="metric-label mb-2">Avg. User Score</div>
+      <div class="metric-value">{{ avg_score_pct }}%</div>
+      <small class="text-muted">{{ avg_score|floatformat:1 }} / {{ avg_total|floatformat:0 }} questions</small>
+    </div>
+  </div>
+</div>
+
+<!-- RAG Evaluation Section -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-search text-primary"></i>
+    RAG Retrieval Accuracy
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> RAG accuracy is assessed via embedding coverage
+    (percentage of chunks with valid vector representations), topic coverage in
+    the textbook corpus, and the distribution of chunks available for semantic
+    retrieval. Cosine similarity is computed using L2-normalized embeddings
+    (all-MiniLM-L6-v2, 384-dim) via numpy <code>np.dot</code>.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Textbook Chunks</div>
+        <div class="metric-value">{{ total_textbook_chunks }}</div>
+        <small class="text-muted">{{ textbook_chunks_with_embeddings }} with embeddings</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Uploaded Chunks</div>
+        <div class="metric-value">{{ total_uploaded_chunks }}</div>
+        <small class="text-muted">{{ uploaded_chunks_with_embeddings }} with embeddings</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Chunks / Session</div>
+        <div class="metric-value">{{ avg_chunks_per_session }}</div>
+        <small class="text-muted">Average per upload session</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-1">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Chunk Embedding Coverage</h6>
+        <div class="chart-container">
+          <canvas id="embeddingCoverageChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">RAG Component Distribution</h6>
+        <div class="chart-container">
+          <canvas id="ragDistributionChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Model Evaluation Section -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-cpu text-primary"></i>
+    Model Generation Accuracy
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> Model accuracy is measured by pipeline success
+    rates (summary, quiz, recommendations), question topic coverage, and provider
+    reliability. The system uses MiniMax-M2.7 as primary with Gemini-2.5-flash-lite
+    as fallback. Success = a non-empty, structurally valid output was produced and
+    persisted. Question quality is proxied by topic diversity and user performance.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Summary Success Rate</div>
+        <div class="metric-value">{{ summary_success_rate }}%</div>
+        <small class="text-muted">{{ sessions_completed }} / {{ total_sessions }} sessions</small>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Quiz Success Rate</div>
+        <div class="metric-value">{{ quiz_success_rate }}%</div>
+        <small class="text-muted">{{ quizzes_completed }} / {{ total_quizzes }} quizzes</small>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Recommendation Success Rate</div>
+        <div class="metric-value">{{ rec_success_rate }}%</div>
+        <small class="text-muted">{{ recs_completed }} / {{ total_attempts }} attempts</small>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Avg. Questions / Quiz</div>
+        <div class="metric-value">{{ avg_questions_per_quiz }}</div>
+        <small class="text-muted">Target: 10 MCQs</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-1">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Pipeline Success Rates</h6>
+        <div class="chart-container">
+          <canvas id="pipelineSuccessChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Question Topic Distribution</h6>
+        <div class="chart-container">
+          <canvas id="topicDistributionChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if provider_distribution %}
+  <div class="row g-4 mt-1">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Provider Distribution</h6>
+        <div class="chart-container">
+          <canvas id="providerChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">GenerationMetric Performance</h6>
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Success Rate</th>
+                <th>Avg Duration</th>
+                <th>Cache Hit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for gtype, stats in metric_stats.items %}
+              <tr>
+                <td class="text-capitalize">{{ gtype }}</td>
+                <td><span class="badge bg-success badge-custom">{{ stats.success_rate|floatformat:1 }}%</span></td>
+                <td>{{ stats.avg_duration|floatformat:0 }} ms</td>
+                <td>{{ stats.cache_hit_rate|floatformat:1 }}%</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- User Performance Section -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-people text-primary"></i>
+    User Performance & Question Quality Proxy
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> Since ground-truth labels for AI-generated
+    questions are unavailable, we use user performance as a proxy for question
+    quality. Well-calibrated questions should produce a range of scores centered
+    around 50-70%. Topic-wise accuracy below 40% may indicate questions are
+    misaligned with the source material or too difficult.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Score Distribution</h6>
+        <div class="chart-container">
+          <canvas id="scoreDistributionChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Topic-wise Accuracy</h6>
+        <div class="chart-container">
+          <canvas id="topicAccuracyChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if topic_accuracy %}
+  <div class="row g-4 mt-1">
+    <div class="col-12">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Detailed Topic Accuracy</h6>
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr>
+                <th>Topic</th>
+                <th>Total Answers</th>
+                <th>Correct</th>
+                <th>Accuracy</th>
+                <th>Quality Indicator</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in topic_accuracy %}
+              <tr>
+                <td>{{ item.topic }}</td>
+                <td>{{ item.total }}</td>
+                <td>{{ item.correct }}</td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="progress flex-grow-1" style="height: 8px; max-width: 120px;">
+                      <div class="progress-bar {% if item.accuracy >= 70 %}bg-success{% elif item.accuracy >= 40 %}bg-warning{% else %}bg-danger{% endif %}"
+                           role="progressbar" style="width: {{ item.accuracy }}%"></div>
+                    </div>
+                    <span class="small fw-bold">{{ item.accuracy }}%</span>
+                  </div>
+                </td>
+                <td>
+                  {% if item.accuracy >= 70 %}
+                    <span class="badge bg-success badge-custom">Well Calibrated</span>
+                  {% elif item.accuracy >= 40 %}
+                    <span class="badge bg-warning text-dark badge-custom">Moderate</span>
+                  {% else %}
+                    <span class="badge bg-danger badge-custom">Review Needed</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Error Analysis -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-bug text-danger"></i>
+    Error Analysis
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> Errors are grouped by pipeline stage and
+    surfaced verbatim (truncated) to ensure reproducibility. Counts indicate
+    frequency of each failure mode.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Quiz Generation Errors</h6>
+        {% if quiz_errors %}
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr><th>Error</th><th>Count</th></tr>
+            </thead>
+            <tbody>
+              {% for err in quiz_errors %}
+              <tr>
+                <td><code class="small">{{ err.error_message|truncatechars:120 }}</code></td>
+                <td><span class="badge bg-danger badge-custom">{{ err.count }}</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+          <i class="bi bi-check-circle text-success"></i>
+          <p>No quiz generation errors recorded.</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Upload Processing Errors</h6>
+        {% if session_errors %}
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr><th>Error</th><th>Count</th></tr>
+            </thead>
+            <tbody>
+              {% for err in session_errors %}
+              <tr>
+                <td><code class="small">{{ err.processing_error|truncatechars:120 }}</code></td>
+                <td><span class="badge bg-danger badge-custom">{{ err.count }}</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+          <i class="bi bi-check-circle text-success"></i>
+          <p>No upload processing errors recorded.</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- System Performance -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-speedometer2 text-primary"></i>
+    System Performance
+  </div>
+
+  <div class="row g-4">
+    <div class="col-md-4">
+      <div class="metric-card text-center">
+        <div class="metric-label">Avg. Processing Time</div>
+        <div class="metric-value">{{ avg_processing_time }}s</div>
+        <small class="text-muted">Upload session end-to-end</small>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="metric-card text-center">
+        <div class="metric-label">Total Quiz Attempts</div>
+        <div class="metric-value">{{ total_attempts }}</div>
+        <small class="text-muted">Across all sessions</small>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="metric-card text-center">
+        <div class="metric-label">Pending / Processing</div>
+        <div class="metric-value">{{ quizzes_pending }}</div>
+        <small class="text-muted">Quizzes currently in flight</small>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Data Transparency Footer -->
+<div class="alert alert-light border mt-4 mb-5">
+  <h6 class="fw-bold"><i class="bi bi-info-circle me-2"></i>Data Transparency Notice</h6>
+  <p class="mb-1 small">
+    All metrics on this page are computed in real-time from the live database.
+    No cached or synthetic values are used. The evaluation methodology follows
+    standard information-retrieval and machine-learning evaluation practices:
+  </p>
+  <ul class="small mb-0">
+    <li>Success rates are calculated as <code>successes / (successes + failures)</code></li>
+    <li>Embedding coverage is <code>embedded_chunks / total_chunks</code></li>
+    <li>User performance is a proxy metric; no human annotation ground truth is available</li>
+    <li>GenerationMetric records are captured per AI provider call when instrumentation is enabled</li>
+  </ul>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  // Common chart options for consistent styling
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { usePointStyle: true, padding: 16, font: { size: 12 } }
+      }
+    }
+  };
+
+  // 1. Embedding Coverage Chart (Doughnut)
+  new Chart(document.getElementById('embeddingCoverageChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['With Embeddings', 'Without Embeddings'],
+      datasets: [{
+        data: [
+          {{ textbook_chunks_with_embeddings }} + {{ uploaded_chunks_with_embeddings }},
+          {{ total_textbook_chunks }} + {{ total_uploaded_chunks }} - {{ textbook_chunks_with_embeddings }} - {{ uploaded_chunks_with_embeddings }}
+        ],
+        backgroundColor: ['#0d6efd', '#e9ecef'],
+        borderWidth: 0
+      }]
+    },
+    options: { ...commonOptions, cutout: '65%' }
+  });
+
+  // 2. RAG Distribution Chart (Bar)
+  new Chart(document.getElementById('ragDistributionChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Textbook Chunks', 'Uploaded Chunks'],
+      datasets: [{
+        label: 'Total',
+        data: [{{ total_textbook_chunks }}, {{ total_uploaded_chunks }}],
+        backgroundColor: ['#0d6efd', '#6610f2'],
+        borderRadius: 6
+      }, {
+        label: 'With Embeddings',
+        data: [{{ textbook_chunks_with_embeddings }}, {{ uploaded_chunks_with_embeddings }}],
+        backgroundColor: ['#6ea8fe', '#a370f7'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#f0f0f0' } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+
+  // 3. Pipeline Success Rates (Bar Horizontal)
+  new Chart(document.getElementById('pipelineSuccessChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Summary Generation', 'Quiz Generation', 'Recommendations'],
+      datasets: [{
+        label: 'Success Rate (%)',
+        data: [{{ summary_success_rate }}, {{ quiz_success_rate }}, {{ rec_success_rate }}],
+        backgroundColor: ['#198754', '#0d6efd', '#ffc107'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      ...commonOptions,
+      scales: {
+        x: { min: 0, max: 100, grid: { color: '#f0f0f0' } },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+
+  // 4. Topic Distribution (Pie)
+  {% if topic_distribution %}
+  new Chart(document.getElementById('topicDistributionChart'), {
+    type: 'pie',
+    data: {
+      labels: [{% for t in topic_distribution %}'{{ t.topic|escapejs }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+      datasets: [{
+        data: [{% for t in topic_distribution %}{{ t.count }}{% if not forloop.last %}, {% endif %}{% endfor %}],
+        backgroundColor: [
+          '#0d6efd', '#6610f2', '#6f42c1', '#d63384', '#dc3545',
+          '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0'
+        ]
+      }]
+    },
+    options: commonOptions
+  });
+  {% else %}
+  document.getElementById('topicDistributionChart').parentElement.innerHTML =
+    '<div class="empty-state"><i class="bi bi-inbox"></i><p>No question data available.</p></div>';
+  {% endif %}
+
+  // 5. Score Distribution (Bar)
+  new Chart(document.getElementById('scoreDistributionChart'), {
+    type: 'bar',
+    data: {
+      labels: ['0-20%', '21-40%', '41-60%', '61-80%', '81-100%'],
+      datasets: [{
+        label: 'Number of Attempts',
+        data: [
+          {{ score_buckets.0_20 }},
+          {{ score_buckets.21_40 }},
+          {{ score_buckets.41_60 }},
+          {{ score_buckets.61_80 }},
+          {{ score_buckets.81_100 }}
+        ],
+        backgroundColor: ['#dc3545', '#fd7e14', '#ffc107', '#198754', '#0d6efd'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#f0f0f0' } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+
+  // 6. Topic Accuracy (Bar Horizontal)
+  {% if topic_accuracy %}
+  new Chart(document.getElementById('topicAccuracyChart'), {
+    type: 'bar',
+    data: {
+      labels: [{% for t in topic_accuracy %}'{{ t.topic|escapejs }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+      datasets: [{
+        label: 'Accuracy (%)',
+        data: [{% for t in topic_accuracy %}{{ t.accuracy }}{% if not forloop.last %}, {% endif %}{% endfor %}],
+        backgroundColor: [{% for t in topic_accuracy %}{% if t.accuracy >= 70 %}'#198754'{% elif t.accuracy >= 40 %}'#ffc107'{% else %}'#dc3545'{% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      ...commonOptions,
+      scales: {
+        x: { min: 0, max: 100, grid: { color: '#f0f0f0' } },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+  {% else %}
+  document.getElementById('topicAccuracyChart').parentElement.innerHTML =
+    '<div class="empty-state"><i class="bi bi-inbox"></i><p>No topic accuracy data available.</p></div>';
+  {% endif %}
+
+  // 7. Provider Distribution (Doughnut)
+  {% if provider_distribution %}
+  new Chart(document.getElementById('providerChart'), {
+    type: 'doughnut',
+    data: {
+      labels: [{% for p in provider_distribution %}'{{ p.provider }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+      datasets: [{
+        data: [{% for p in provider_distribution %}{{ p.count }}{% if not forloop.last %}, {% endif %}{% endfor %}],
+        backgroundColor: ['#0d6efd', '#20c997'],
+        borderWidth: 0
+      }]
+    },
+    options: { ...commonOptions, cutout: '65%' }
+  });
+  {% else %}
+  document.getElementById('providerChart').parentElement.innerHTML =
+    '<div class="empty-state"><i class="bi bi-inbox"></i><p>No provider metric data available.</p></div>';
+  {% endif %}
+</script>
+{% endblock %}

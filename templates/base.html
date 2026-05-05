@@ -58,12 +58,27 @@
 </head>
 <body>
 
-    <nav class="navbar navbar-expand-lg justify-content-center" style="position: fixed; top: 0; left: 0; right: 0; z-index: 1050;">
-        <div class="container justify-content-center">
+    <nav class="navbar navbar-expand-lg" style="position: fixed; top: 0; left: 0; right: 0; z-index: 1050;">
+        <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="{% url 'home' %}">
                 <img src="{% static 'logo.png' %}" alt="QuizSense Logo" style="width: 32px; height: 32px; margin-right: 10px;">
                 QuizSense
             </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'home' %}">Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'evaluation' %}">
+                            <i class="bi bi-graph-up-arrow me-1"></i>Evaluation
+                        </a>
+                    </li>
+                </ul>
+            </div>
         </div>
     </nav>
 

@@ -10,6 +10,7 @@ from .models import (
 	Quiz,
 	QuizAttempt,
 	QuizAnswer,
+	GenerationMetric,
 )
 
 
@@ -88,3 +89,11 @@ class QuizAnswerAdmin(admin.ModelAdmin):
 	list_display = ['id', 'attempt', 'question', 'selected_answer', 'is_correct']
 	list_filter = ['is_correct', 'question__chapter']
 	ordering = ['attempt_id', 'question_id']
+
+
+@admin.register(GenerationMetric)
+class GenerationMetricAdmin(admin.ModelAdmin):
+	list_display = ['id', 'generation_type', 'provider', 'success', 'duration_ms', 'cache_hit', 'created_at']
+	list_filter = ['generation_type', 'provider', 'success', 'cache_hit']
+	ordering = ['-created_at']
+	search_fields = ['error_message']
