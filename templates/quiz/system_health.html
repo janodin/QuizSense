@@ -1,0 +1,522 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}System Health — QuizSense{% endblock %}
+
+{% block extra_css %}
+<style>
+  .eval-hero {
+    background: linear-gradient(135deg, #198754 0%, #146c43 100%);
+    color: #fff;
+    border-radius: 1rem;
+    padding: 2.5rem 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 8px 24px rgba(25, 135, 84, 0.2);
+  }
+  .eval-hero h1 {
+    font-weight: 800;
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+  }
+  .eval-hero p {
+    opacity: 0.9;
+    margin-bottom: 0;
+    max-width: 700px;
+  }
+  .metric-card {
+    background: #fff;
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    border: 1px solid #e9ecef;
+    height: 100%;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+  }
+  .metric-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #0d6efd;
+    line-height: 1.2;
+  }
+  .metric-label {
+    font-size: 0.875rem;
+    color: #6c757d;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .section-header {
+    font-weight: 700;
+    font-size: 1.35rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #e9ecef;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .methodology-box {
+    background: #f8f9fa;
+    border-left: 4px solid #198754;
+    padding: 1rem 1.25rem;
+    border-radius: 0 0.5rem 0.5rem 0;
+    font-size: 0.95rem;
+    color: #495057;
+  }
+  .chart-container {
+    position: relative;
+    height: 300px;
+    width: 100%;
+  }
+  .data-table th {
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #f8f9fa;
+  }
+  .data-table td, .data-table th {
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+  }
+  .badge-custom {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.35em 0.65em;
+    border-radius: 0.375rem;
+  }
+  .empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: #6c757d;
+  }
+  .empty-state i {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    display: block;
+  }
+  .dashboard-nav {
+    margin-bottom: 2rem;
+  }
+  .dashboard-nav .nav-link {
+    color: #495057;
+    font-weight: 500;
+  }
+  .dashboard-nav .nav-link.active {
+    background-color: #198754;
+    color: #fff;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Cross-Dashboard Navigation -->
+<ul class="nav nav-pills dashboard-nav">
+  <li class="nav-item">
+    <a class="nav-link" href="{% url 'evaluation' %}">
+      <i class="bi bi-graph-up-arrow me-1"></i>Evaluation Dashboard
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link active" href="{% url 'system_health' %}">
+      <i class="bi bi-heart-pulse me-1"></i>System Health
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="{% url 'user_analytics' %}">
+      <i class="bi bi-people me-1"></i>User Analytics
+    </a>
+  </li>
+</ul>
+
+<!-- Hero Section -->
+<div class="eval-hero">
+  <h1><i class="bi bi-heart-pulse me-2"></i>System Health Dashboard</h1>
+  <p>
+    Operational and pipeline health metrics. These numbers reflect system
+    throughput, coverage, and reliability — they are not measures of accuracy
+    or question quality.
+  </p>
+</div>
+
+<!-- Overall Accuracy Score -->
+<div class="row g-4 mb-5">
+  <div class="col-md-4">
+    <div class="metric-card text-center">
+      <div class="metric-label mb-2">Overall Pipeline Success Rate</div>
+      <div class="metric-value">{{ overall_system_accuracy }}%</div>
+      <small class="text-muted">Mean of pipeline completion rates</small>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="metric-card text-center">
+      <div class="metric-label mb-2">Embedding Coverage</div>
+      <div class="metric-value">{{ embedding_coverage }}%</div>
+      <small class="text-muted">Chunks with computed embeddings</small>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="metric-card text-center">
+      <div class="metric-label mb-2">Avg. Processing Time</div>
+      <div class="metric-value">{{ avg_processing_time }}s</div>
+      <small class="text-muted">Upload session end-to-end</small>
+    </div>
+  </div>
+</div>
+
+<!-- System Operational Metrics -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-hdd-stack text-success"></i>
+    System Operational Metrics
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> These metrics track the operational state of
+    the vector store and ingestion pipeline. Embedding coverage indicates how
+    many chunks are searchable. Topic label coverage shows the richness of
+    metadata attached to textbook chunks. Pending counts reflect current system
+    load.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Textbook Chunks</div>
+        <div class="metric-value">{{ total_textbook_chunks }}</div>
+        <small class="text-muted">{{ textbook_chunks_with_embeddings }} with embeddings</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Uploaded Chunks</div>
+        <div class="metric-value">{{ total_uploaded_chunks }}</div>
+        <small class="text-muted">{{ uploaded_chunks_with_embeddings }} with embeddings</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card">
+        <div class="metric-label">Chunks / Session</div>
+        <div class="metric-value">{{ avg_chunks_per_session }}</div>
+        <small class="text-muted">Average per upload session</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-1">
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Topic Label Coverage</div>
+        <div class="metric-value">{{ topic_coverage_pct }}%</div>
+        <small class="text-muted">Textbook chunks with topic metadata</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Pending / Processing</div>
+        <div class="metric-value">{{ quizzes_pending }}</div>
+        <small class="text-muted">Quizzes currently in flight</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Total Chunks</div>
+        <div class="metric-value">{{ total_chunks }}</div>
+        <small class="text-muted">Textbook + uploaded combined</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-1">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Chunk Embedding Coverage</h6>
+        <div class="chart-container">
+          <canvas id="embeddingCoverageChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">RAG Component Distribution</h6>
+        <div class="chart-container">
+          <canvas id="ragDistributionChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Pipeline Operational Metrics -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-kanban text-success"></i>
+    Pipeline Operational Metrics
+  </div>
+
+  <div class="row g-4">
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Summary Success Rate</div>
+        <div class="metric-value">{{ summary_success_rate }}%</div>
+        <small class="text-muted">{{ sessions_completed }} completed / {{ sessions_failed }} failed</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Quiz Success Rate</div>
+        <div class="metric-value">{{ quiz_success_rate }}%</div>
+        <small class="text-muted">{{ quizzes_completed }} completed / {{ quizzes_failed }} failed</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Recommendation Success Rate</div>
+        <div class="metric-value">{{ rec_success_rate }}%</div>
+        <small class="text-muted">{{ recs_completed }} completed / {{ recs_failed }} failed</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-1">
+    <div class="col-12">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Pipeline Success Rates</h6>
+        <div class="chart-container">
+          <canvas id="pipelineSuccessChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Provider Operational Metrics -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-cloud-check text-success"></i>
+    Provider Operational Metrics
+  </div>
+
+  {% if has_generation_metrics %}
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Provider Distribution</h6>
+        <div class="chart-container">
+          <canvas id="providerChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">GenerationMetric Performance</h6>
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Success Rate</th>
+                <th>Avg Duration</th>
+                <th>Cache Hit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for gtype, stats in metric_stats.items %}
+              <tr>
+                <td class="text-capitalize">{{ gtype }}</td>
+                <td><span class="badge bg-success badge-custom">{{ stats.success_rate|floatformat:1 }}%</span></td>
+                <td>{{ stats.avg_duration|floatformat:0 }} ms</td>
+                <td>{{ stats.cache_hit_rate|floatformat:1 }}%</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="bi bi-inbox"></i>
+    <p>No provider metrics recorded yet.</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Error Analysis -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-bug text-danger"></i>
+    Error Analysis
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> Errors are grouped by pipeline stage and
+    surfaced verbatim (truncated) to ensure reproducibility. Counts indicate
+    frequency of each failure mode.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Quiz Generation Errors</h6>
+        {% if quiz_errors %}
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr><th>Error</th><th>Count</th></tr>
+            </thead>
+            <tbody>
+              {% for err in quiz_errors %}
+              <tr>
+                <td><code class="small">{{ err.error_message|truncatechars:120 }}</code></td>
+                <td><span class="badge bg-danger badge-custom">{{ err.count }}</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+          <i class="bi bi-check-circle text-success"></i>
+          <p>No quiz generation errors recorded.</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Upload Processing Errors</h6>
+        {% if session_errors %}
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr><th>Error</th><th>Count</th></tr>
+            </thead>
+            <tbody>
+              {% for err in session_errors %}
+              <tr>
+                <td><code class="small">{{ err.processing_error|truncatechars:120 }}</code></td>
+                <td><span class="badge bg-danger badge-custom">{{ err.count }}</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+          <i class="bi bi-check-circle text-success"></i>
+          <p>No upload processing errors recorded.</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { usePointStyle: true, padding: 16, font: { size: 12 } }
+      }
+    }
+  };
+
+  // Embedding Coverage Chart (Doughnut)
+  new Chart(document.getElementById('embeddingCoverageChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['With Embeddings', 'Without Embeddings'],
+      datasets: [{
+        data: [
+          {{ textbook_chunks_with_embeddings }} + {{ uploaded_chunks_with_embeddings }},
+          {{ total_textbook_chunks }} + {{ total_uploaded_chunks }} - {{ textbook_chunks_with_embeddings }} - {{ uploaded_chunks_with_embeddings }}
+        ],
+        backgroundColor: ['#198754', '#e9ecef'],
+        borderWidth: 0
+      }]
+    },
+    options: { ...commonOptions, cutout: '65%' }
+  });
+
+  // RAG Distribution Chart (Bar)
+  new Chart(document.getElementById('ragDistributionChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Textbook Chunks', 'Uploaded Chunks'],
+      datasets: [{
+        label: 'Total',
+        data: [{{ total_textbook_chunks }}, {{ total_uploaded_chunks }}],
+        backgroundColor: ['#198754', '#20c997'],
+        borderRadius: 6
+      }, {
+        label: 'With Embeddings',
+        data: [{{ textbook_chunks_with_embeddings }}, {{ uploaded_chunks_with_embeddings }}],
+        backgroundColor: ['#75b798', '#a6e9d5'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#f0f0f0' } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+
+  // Pipeline Success Rates (Bar Horizontal)
+  new Chart(document.getElementById('pipelineSuccessChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Summary Generation', 'Quiz Generation', 'Recommendations'],
+      datasets: [{
+        label: 'Success Rate (%)',
+        data: [{{ summary_success_rate }}, {{ quiz_success_rate }}, {{ rec_success_rate }}],
+        backgroundColor: ['#198754', '#0d6efd', '#ffc107'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      ...commonOptions,
+      scales: {
+        x: { min: 0, max: 100, grid: { color: '#f0f0f0' } },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+
+  // Provider Distribution (Doughnut)
+  {% if has_generation_metrics %}
+    {% if provider_distribution %}
+    new Chart(document.getElementById('providerChart'), {
+      type: 'doughnut',
+      data: {
+        labels: [{% for p in provider_distribution %}'{{ p.provider }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+        datasets: [{
+          data: [{% for p in provider_distribution %}{{ p.count }}{% if not forloop.last %}, {% endif %}{% endfor %}],
+          backgroundColor: ['#0d6efd', '#20c997'],
+          borderWidth: 0
+        }]
+      },
+      options: { ...commonOptions, cutout: '65%' }
+    });
+    {% else %}
+    document.getElementById('providerChart').parentElement.innerHTML =
+      '<div class="empty-state"><i class="bi bi-inbox"></i><p>No provider metric data available.</p></div>';
+    {% endif %}
+  {% endif %}
+</script>
+{% endblock %}

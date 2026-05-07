@@ -15,6 +15,7 @@ All use MiniMax M2.7 as primary AI provider with Gemini fallback.
 """
 
 import hashlib
+import json
 import logging
 import time
 import threading
@@ -30,6 +31,7 @@ from django.utils import timezone
 
 from ..models import (
     Chapter,
+    GenerationMetric,
     Question,
     Quiz,
     QuizAttempt,
@@ -58,6 +60,8 @@ class GenerationResult:
     error: Optional[str] = None
     generation_type: Optional[GenerationType] = None
     duration_ms: float = 0
+    provider_name: Optional[str] = None
+    was_fallback: bool = False
 
 
 @dataclass
@@ -417,7 +421,7 @@ class MultiProvider:
         start = timezone.now()
         last_error = None
 
-        for provider in self._providers:
+        for i, provider in enumerate(self._providers):
             try:
                 result = provider.generate_summary(text, chapter_title, cross_reference_notes)
                 duration = (timezone.now() - start).total_seconds() * 1000
@@ -426,6 +430,8 @@ class MultiProvider:
                     data=result,
                     generation_type=GenerationType.SUMMARY,
                     duration_ms=duration,
+                    provider_name=provider.get_provider_name(),
+                    was_fallback=(i > 0),
                 )
             except Exception as exc:
                 logger.warning(
@@ -450,7 +456,7 @@ class MultiProvider:
         start = timezone.now()
         last_error = None
 
-        for provider in self._providers:
+        for i, provider in enumerate(self._providers):
             try:
                 result = provider.generate_mcq(text, chapter_title, cross_reference_notes)
                 duration = (timezone.now() - start).total_seconds() * 1000
@@ -459,6 +465,8 @@ class MultiProvider:
                     data=result,
                     generation_type=GenerationType.QUIZ,
                     duration_ms=duration,
+                    provider_name=provider.get_provider_name(),
+                    was_fallback=(i > 0),
                 )
             except Exception as exc:
                 logger.warning(
@@ -483,7 +491,7 @@ class MultiProvider:
         start = timezone.now()
         last_error = None
 
-        for provider in self._providers:
+        for i, provider in enumerate(self._providers):
             try:
                 result = provider.generate_recommendations(quiz_attempt, questions_with_answers)
                 duration = (timezone.now() - start).total_seconds() * 1000
@@ -492,6 +500,8 @@ class MultiProvider:
                     data=result,
                     generation_type=GenerationType.RECOMMENDATIONS,
                     duration_ms=duration,
+                    provider_name=provider.get_provider_name(),
+                    was_fallback=(i > 0),
                 )
             except Exception as exc:
                 logger.warning(
@@ -515,7 +525,7 @@ class MultiProvider:
         start = timezone.now()
         last_error = None
 
-        for provider in self._providers:
+        for i, provider in enumerate(self._providers):
             try:
                 result = provider.extract_concepts(text)
                 duration = (timezone.now() - start).total_seconds() * 1000
@@ -524,6 +534,8 @@ class MultiProvider:
                     data=result,
                     generation_type=GenerationType.SUMMARY,
                     duration_ms=duration,
+                    provider_name=provider.get_provider_name(),
+                    was_fallback=(i > 0),
                 )
             except Exception as exc:
                 logger.warning(
@@ -569,6 +581,18 @@ def _cache_key(prefix: str, chapter_id: Any, content_hash: str) -> str:
     return f"quizsense:{prefix}:ch{chapter_id}:{content_hash}"
 
 
+def _validate_summary(data: Any) -> bool:
+    if not isinstance(data, str):
+        return False
+    return (
+        "## Study Summary" in data
+        and "### Overview" in data
+        and "### Key Concepts" in data
+        and "### Review Focus" in data
+        and len(data) > 100
+    )
+
+
 def _process_summary_for_session(upload_session: UploadSession, timer=None) -> GenerationResult:
     chapter_title = (
         upload_session.chapter.title if upload_session.chapter else "Fundamentals of Programming"
@@ -585,58 +609,96 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
         if f.extracted_text and f.extracted_text.strip()
     )
 
+    cache_hit = False
+    result = None
+
     if not all_text.strip():
-        return GenerationResult(
+        result = GenerationResult(
             success=False,
             error="No extracted text was available for summary generation.",
             generation_type=GenerationType.SUMMARY,
         )
-
-    chapter_id = upload_session.chapter_id or 0
-    cache_key = _cache_key("summary", chapter_id, _get_content_hash(all_text))
-    cached_summary = cache.get(cache_key)
-    if cached_summary:
-        _detail("Summary cache hit — returning cached result.")
-        upload_session.summary = cached_summary
-        upload_session.save(update_fields=["summary"])
-        return GenerationResult(
-            success=True,
-            data=cached_summary,
-            generation_type=GenerationType.SUMMARY,
-        )
-
-    provider = get_generation_provider()
-    total_len = len(all_text)
-
-    # ── OPTION C: Map-Reduce for long documents ───────────────────────────────
-    # For documents > 15K chars, we use a two-pass approach:
-    #   MAP:   Extract key concepts from evenly-spaced sections (6 chunks max)
-    #   REDUCE: Synthesize all concept lists into a polished summary
-    # This covers the full document breadth without losing information in long context.
-    # ──────────────────────────────────────────────────────────────────────────
-
-    if total_len > 15000:
-        return _map_reduce_summary(
-            upload_session, all_text, chapter_title, provider, _detail
-        )
-
-    # ── Fast path: single-pass for short documents ────────────────────────────
-    _detail(f"Document is short ({total_len} chars) — using single-pass summary...")
-    combined_text = all_text[:12000]
-    _detail(f"Context ready: {len(combined_text)} chars")
-
-    _detail("Calling AI provider (MiniMax/Gemini)...")
-    result = provider.generate_summary(combined_text, chapter_title, "N/A")
-
-    if result.success:
-        _detail(f"AI response received: {len(result.data)} chars")
-        upload_session.summary = result.data
-        upload_session.save(update_fields=["summary"])
-        cache.set(cache_key, result.data, timeout=60 * 60 * 24 * 7)
     else:
-        _detail(f"AI call failed: {result.error}")
+        chapter_id = upload_session.chapter_id or 0
+        cache_key = _cache_key("summary", chapter_id, _get_content_hash(all_text))
 
-    return result
+        # Retrieve context via RAG BEFORE cache check — ensures RetrievalLog is always created
+        _detail("Retrieving context via RAG...")
+        rag_result = retrieve_context_for_session(upload_session, mode='summary')
+        combined_text = rag_result['context_text'] or all_text[:12000]
+        cross_ref = rag_result['cross_reference_notes']
+        _detail(f"RAG context ready: {len(combined_text)} chars")
+
+        cached_summary = cache.get(cache_key)
+        if cached_summary:
+            cache_hit = True
+            _detail("Summary cache hit — returning cached result.")
+            upload_session.summary = cached_summary
+            upload_session.save(update_fields=["summary"])
+            result = GenerationResult(
+                success=True,
+                data=cached_summary,
+                generation_type=GenerationType.SUMMARY,
+                provider_name='cache',
+                was_fallback=False,
+            )
+        else:
+            provider = get_generation_provider()
+            total_len = len(all_text)
+
+            if total_len > 15000:
+                result = _map_reduce_summary(
+                    upload_session, all_text, chapter_title, provider, _detail
+                )
+            else:
+                _detail(f"Document is short ({total_len} chars) — using single-pass summary...")
+                _detail("Calling AI provider (MiniMax/Gemini)...")
+                result = provider.generate_summary(combined_text, chapter_title, cross_ref)
+
+            if result and result.success:
+                if _validate_summary(result.data):
+                    _detail(f"AI response received: {len(result.data)} chars")
+                    upload_session.summary = result.data
+                    upload_session.save(update_fields=["summary"])
+                    cache.set(cache_key, result.data, timeout=60 * 60 * 24 * 7)
+                else:
+                    _detail("Summary validation failed")
+                    upload_session.processing_status = UploadSession.STATUS_FAILED
+                    upload_session.processing_error = "Summary validation failed: missing required sections"
+                    upload_session.save(update_fields=["processing_status", "processing_error"])
+                    result = GenerationResult(
+                        success=False,
+                        error="Summary validation failed",
+                        generation_type=GenerationType.SUMMARY,
+                        duration_ms=result.duration_ms,
+                        provider_name=result.provider_name,
+                        was_fallback=getattr(result, 'was_fallback', False) or False,
+                    )
+            elif result:
+                _detail(f"AI call failed: {result.error}")
+
+    # Instrument GenerationMetric at the very end
+    if result is not None:
+        output_length = len(result.data) if result.success and isinstance(result.data, str) else 0
+        output_validated = result.success and _validate_summary(result.data) if result.success else False
+        GenerationMetric.objects.create(
+            generation_type='summary',
+            provider=result.provider_name or '',
+            success=result.success,
+            duration_ms=result.duration_ms,
+            cache_hit=cache_hit,
+            error_message=(result.error or '')[:500] if not result.success else '',
+            output_length=output_length,
+            related_session=upload_session if isinstance(upload_session, UploadSession) else None,
+            output_validated=output_validated,
+            was_fallback=getattr(result, 'was_fallback', False) or False,
+        )
+
+    return result if result is not None else GenerationResult(
+        success=False,
+        error="Unknown error in summary processing.",
+        generation_type=GenerationType.SUMMARY,
+    )
 
 
 def _map_reduce_summary(
@@ -647,6 +709,7 @@ def _map_reduce_summary(
     _detail,
 ) -> GenerationResult:
     """Two-pass summary: extract concepts from sections IN PARALLEL, then synthesize."""
+    start_total = timezone.now()
     total_len = len(all_text)
 
     # Calculate number of chunks based on document length (capped at 4)
@@ -697,10 +760,12 @@ def _map_reduce_summary(
     concept_notes = [n for n in concept_notes if n is not None]
 
     if not concept_notes:
+        total_duration = (timezone.now() - start_total).total_seconds() * 1000
         return GenerationResult(
             success=False,
             error="All concept extraction (map) calls failed.",
             generation_type=GenerationType.SUMMARY,
+            duration_ms=total_duration,
         )
 
     # ── REDUCE PHASE: Synthesize all concept notes into final summary ─────────
@@ -711,185 +776,244 @@ def _map_reduce_summary(
 
     if reduce_result.success:
         _detail(f"REDUCE: final summary received ({len(reduce_result.data)} chars)")
-        upload_session.summary = reduce_result.data
-        upload_session.save(update_fields=["summary"])
-        chapter_id = upload_session.chapter_id or 0
-        cache_key = _cache_key("summary", chapter_id, _get_content_hash(all_text))
-        cache.set(cache_key, reduce_result.data, timeout=60 * 60 * 24 * 7)
     else:
         _detail(f"REDUCE: synthesis failed: {reduce_result.error}")
 
+    total_duration = (timezone.now() - start_total).total_seconds() * 1000
+    reduce_result.duration_ms = total_duration
     return reduce_result
 
 
 def _process_quiz_for_session(upload_session) -> GenerationResult:
     from .topic_service import find_topic_for_chapter
 
+    start_time = timezone.now()
+
     if isinstance(upload_session, int):
         upload_session = UploadSession.objects.select_related("chapter").get(id=upload_session)
 
     chapter = upload_session.chapter
+    result = None
+    cache_hit = False
+    quiz = None
+    output_length = 0
+
     if not chapter:
-        return GenerationResult(
+        result = GenerationResult(
             success=False,
             error="Quiz has no associated chapter.",
             generation_type=GenerationType.QUIZ,
         )
-
-    # ── Lock the most recent quiz for this session to prevent race conditions ──
-    # when multiple generate_quiz_task Celery tasks run concurrently.
-    with transaction.atomic():
-        quiz = (
-            Quiz.objects
-            .filter(upload_session=upload_session)
-            .select_for_update(nowait=False)
-            .order_by("-created_at")
-            .first()
-        )
-        if not quiz:
-            primary_file = upload_session.files.order_by("id").first()
-            quiz = Quiz.objects.create(
-                chapter=chapter,
-                upload_session=upload_session,
-                uploaded_file=primary_file,
-                status=Quiz.STATUS_PROCESSING,
-            )
-        elif quiz.status == Quiz.STATUS_COMPLETED:
-            # Another task already finished this quiz — return it immediately.
-            logger.info("[QUIZ] Quiz %s already completed for session %s — returning existing.", quiz.id, upload_session.id)
-            return GenerationResult(
-                success=True,
-                data=quiz,
-                generation_type=GenerationType.QUIZ,
-            )
-        else:
-            # Ensure status is processing while we work.
-            quiz.status = Quiz.STATUS_PROCESSING
-            quiz.save(update_fields=["status"])
-
-    def _fail(error_msg: str) -> GenerationResult:
-        """Mark quiz as FAILED and return a failed GenerationResult."""
-        if quiz.status in {Quiz.STATUS_PENDING, Quiz.STATUS_PROCESSING}:
-            quiz.status = Quiz.STATUS_FAILED
-            quiz.error_message = error_msg[:500]
-            quiz.save(update_fields=["status", "error_message"])
-        return GenerationResult(
-            success=False,
-            error=error_msg,
-            generation_type=GenerationType.QUIZ,
-        )
-
-    # OPTIMIZATION: Build quiz context directly from uploaded chunks without re-embedding.
-    # RAG semantic search isn't necessary for quiz generation — we want even coverage
-    # of the whole document, not just the "most similar" chunks to a query.
-    raw_session_chunks = list(
-        UploadedChunk.objects.filter(upload_session=upload_session)
-        .only("id", "content")
-        .order_by("chunk_index")[:60]
-    )
-
-    if not raw_session_chunks:
-        return _fail("No uploaded chunks available for quiz generation.")
-
-    # Sample chunks evenly for broad coverage (up to 8 chunks)
-    num_context_chunks = min(8, max(3, len(raw_session_chunks) // 15))
-    if len(raw_session_chunks) <= num_context_chunks:
-        selected_chunks = raw_session_chunks
     else:
-        step = len(raw_session_chunks) // num_context_chunks
-        selected_chunks = [raw_session_chunks[i * step] for i in range(num_context_chunks)]
-
-    context_text = "\n\n".join(f"- {chunk.content}" for chunk in selected_chunks)
-
-    # Light textbook cross-reference (optional — just top 2 chunks from textbook)
-    textbook_chunks = list(
-        TextbookChunk.objects.filter(chapter=chapter)
-        .only("id", "content", "topic")
-        .order_by("?")[:2]
-    )
-    if textbook_chunks:
-        context_text += "\n\n[Textbook Reference Context]\n"
-        context_text += "\n\n".join(f"- {chunk.content}" for chunk in textbook_chunks)
-
-    cross_ref = "N/A"
-    if textbook_chunks:
-        topics = [c.topic.title for c in textbook_chunks if c.topic]
-        if topics:
-            cross_ref = "Related topics: " + ", ".join(topics)
-
-    rag_context = GenerationContext(
-        context_text=context_text,
-        cross_reference_notes=cross_ref,
-    )
-
-    provider = get_generation_provider()
-
-    # Check cache for previously generated quiz
-    quiz_cache_key = _cache_key(
-        "quiz", chapter.id, _get_content_hash(rag_context.context_text + chapter.title)
-    )
-    cached_quiz_data = cache.get(quiz_cache_key)
-    if cached_quiz_data:
-        logger.info("[QUIZ] Cache hit for session %s — skipping AI call.", upload_session.id)
-        result = GenerationResult(
-            success=True,
-            data=cached_quiz_data,
-            generation_type=GenerationType.QUIZ,
-        )
-    else:
-        result = provider.generate_mcq(
-            rag_context.context_text,
-            chapter.title,
-            rag_context.cross_reference_notes,
-        )
-        if result.success and result.data:
-            cache.set(quiz_cache_key, result.data, timeout=60 * 60 * 24 * 7)
-
-    if not result.success or not result.data:
-        return _fail(result.error or "AI quiz generation returned no data.")
-
-    # ── SUCCESS: populate questions and mark COMPLETED ──
-    primary_file = upload_session.files.order_by("id").first()
-    existing_topics = list(Topic.objects.filter(chapter=chapter))
-    questions_to_create = []
-
-    for mcq in result.data[:10]:
-        choices = mcq.get("choices") or {}
-        topic = find_topic_for_chapter(chapter, mcq.get("topic", ""), create=True, existing_topics=existing_topics)
-        questions_to_create.append(
-            Question(
-                chapter=chapter,
-                topic=topic,
-                uploaded_file=primary_file,
-                text=mcq["question"],
-                choice_a=choices.get("A", ""),
-                choice_b=choices.get("B", ""),
-                choice_c=choices.get("C", ""),
-                choice_d=choices.get("D", ""),
-                correct_answer=mcq["correct_answer"],
+        # ── Lock the most recent quiz for this session to prevent race conditions ──
+        with transaction.atomic():
+            quiz = (
+                Quiz.objects
+                .filter(upload_session=upload_session)
+                .select_for_update(nowait=False)
+                .order_by("-created_at")
+                .first()
             )
+            if not quiz:
+                primary_file = upload_session.files.order_by("id").first()
+                quiz = Quiz.objects.create(
+                    chapter=chapter,
+                    upload_session=upload_session,
+                    uploaded_file=primary_file,
+                    status=Quiz.STATUS_PROCESSING,
+                )
+            elif quiz.status == Quiz.STATUS_COMPLETED:
+                logger.info("[QUIZ] Quiz %s already completed for session %s — returning existing.", quiz.id, upload_session.id)
+                result = GenerationResult(
+                    success=True,
+                    data=quiz,
+                    generation_type=GenerationType.QUIZ,
+                )
+            else:
+                quiz.status = Quiz.STATUS_PROCESSING
+                quiz.save(update_fields=["status"])
+
+        if result is None:
+            generation_occurred = True
+
+            def _fail(error_msg: str, original_result: GenerationResult = None) -> GenerationResult:
+                """Mark quiz as FAILED and return a failed GenerationResult."""
+                if quiz.status in {Quiz.STATUS_PENDING, Quiz.STATUS_PROCESSING}:
+                    quiz.status = Quiz.STATUS_FAILED
+                    quiz.error_message = error_msg[:500]
+                    quiz.save(update_fields=["status", "error_message"])
+                return GenerationResult(
+                    success=False,
+                    error=error_msg,
+                    generation_type=GenerationType.QUIZ,
+                    duration_ms=original_result.duration_ms if original_result else 0,
+                    provider_name=original_result.provider_name if original_result else None,
+                    was_fallback=original_result.was_fallback if original_result else False,
+                )
+
+            def _detail(msg):
+                logger.info("[QUIZ SESSION %s] %s", upload_session.id, msg)
+
+            # Use RAG retrieval for quiz context (also logs to RetrievalLog)
+            _detail("Retrieving context via RAG for quiz generation...")
+            rag_result = retrieve_context_for_session(upload_session, mode='quiz')
+            context_text = rag_result['context_text']
+            cross_ref = rag_result['cross_reference_notes']
+
+            if not context_text:
+                # Fallback: build minimal context from uploaded chunks if RAG returns nothing
+                raw_session_chunks = list(
+                    UploadedChunk.objects.filter(upload_session=upload_session)
+                    .only("id", "content")
+                    .order_by("chunk_index")[:60]
+                )
+                if not raw_session_chunks:
+                    result = _fail("No uploaded chunks available for quiz generation.")
+                else:
+                    context_text = "\n\n".join(f"- {chunk.content}" for chunk in raw_session_chunks[:8])
+                    cross_ref = "N/A"
+                    _detail(f"RAG returned empty — using {len(raw_session_chunks[:8])} direct chunks as fallback")
+
+            if result is None:
+                rag_context = GenerationContext(
+                    context_text=context_text,
+                    cross_reference_notes=cross_ref,
+                )
+
+                provider = get_generation_provider()
+
+                quiz_cache_key = _cache_key(
+                    "quiz", chapter.id, _get_content_hash(rag_context.context_text + chapter.title)
+                )
+                cached_quiz_data = cache.get(quiz_cache_key)
+                if cached_quiz_data:
+                    cache_hit = True
+                    logger.info("[QUIZ] Cache hit for session %s — skipping AI call.", upload_session.id)
+                    result = GenerationResult(
+                        success=True,
+                        data=cached_quiz_data,
+                        generation_type=GenerationType.QUIZ,
+                        provider_name='cache',
+                        was_fallback=False,
+                    )
+                else:
+                    result = provider.generate_mcq(
+                        rag_context.context_text,
+                        chapter.title,
+                        rag_context.cross_reference_notes,
+                    )
+                    if result.success and result.data:
+                        cache.set(quiz_cache_key, result.data, timeout=60 * 60 * 24 * 7)
+
+                if result and result.success and result.data:
+                    # ── VALIDATE quiz data BEFORE creating questions ──
+                    validation_errors = []
+                    for i, mcq in enumerate(result.data[:10]):
+                        q_text = mcq.get('question', '')
+                        if not isinstance(q_text, str) or len(q_text) <= 10:
+                            validation_errors.append(f"Q{i+1}: question missing or too short")
+                        choices = mcq.get('choices') or {}
+                        if not isinstance(choices, dict) or not all(isinstance(choices.get(k), str) and choices.get(k) for k in ['A', 'B', 'C', 'D']):
+                            validation_errors.append(f"Q{i+1}: invalid choices")
+                        if mcq.get('correct_answer') not in {'A', 'B', 'C', 'D'}:
+                            validation_errors.append(f"Q{i+1}: invalid correct_answer")
+                        topic = mcq.get('topic', '')
+                        if not isinstance(topic, str) or not topic:
+                            validation_errors.append(f"Q{i+1}: topic missing")
+
+                    if validation_errors:
+                        result = _fail(f"Quiz validation failed: {', '.join(validation_errors)}", original_result=result)
+                    else:
+                        quiz_json = json.dumps(result.data[:10])
+                        output_length = len(quiz_json)
+
+                        primary_file = upload_session.files.order_by("id").first()
+                        existing_topics = list(Topic.objects.filter(chapter=chapter))
+                        questions_to_create = []
+
+                        for mcq in result.data[:10]:
+                            choices = mcq.get("choices") or {}
+                            topic = find_topic_for_chapter(chapter, mcq.get("topic", ""), create=True, existing_topics=existing_topics)
+                            questions_to_create.append(
+                                Question(
+                                    chapter=chapter,
+                                    topic=topic,
+                                    uploaded_file=primary_file,
+                                    text=mcq["question"],
+                                    choice_a=choices.get("A", ""),
+                                    choice_b=choices.get("B", ""),
+                                    choice_c=choices.get("C", ""),
+                                    choice_d=choices.get("D", ""),
+                                    correct_answer=mcq["correct_answer"],
+                                )
+                            )
+
+                        with transaction.atomic():
+                            quiz.questions.clear()
+                            created_questions = Question.objects.bulk_create(questions_to_create)
+                            quiz.questions.add(*created_questions)
+
+                            quiz.status = Quiz.STATUS_COMPLETED
+                            quiz.generated_at = timezone.now()
+                            quiz.save(update_fields=["status", "generated_at"])
+
+                        logger.info(
+                            "Quiz %s generated for upload session %s with %s questions.",
+                            quiz.id,
+                            upload_session.id,
+                            len(result.data[:10]),
+                        )
+                        result = GenerationResult(
+                            success=True,
+                            data=quiz,
+                            generation_type=GenerationType.QUIZ,
+                            duration_ms=result.duration_ms,
+                            provider_name=result.provider_name,
+                            was_fallback=getattr(result, 'was_fallback', False) or False,
+                        )
+                elif result and result.success and not result.data:
+                    result = _fail("AI quiz generation returned no data.", original_result=result)
+                elif result and not result.success:
+                    result = _fail(result.error or "AI quiz generation failed.", original_result=result)
+
+    # Instrument GenerationMetric at the very end
+    if result is not None:
+        duration_ms = result.duration_ms or 0
+        wall_clock_ms = (timezone.now() - start_time).total_seconds() * 1000
+        final_duration = max(duration_ms, wall_clock_ms)
+
+        if output_length == 0 and result.success and result.data:
+            if isinstance(result.data, list):
+                output_length = len(json.dumps(result.data))
+            elif isinstance(result.data, str):
+                output_length = len(result.data)
+            elif hasattr(result.data, 'questions'):
+                output_length = result.data.questions.count()
+
+        output_validated = False
+        if result.success and result.generation_type == GenerationType.QUIZ:
+            if isinstance(result.data, list) and len(result.data) > 0:
+                output_validated = True
+            elif hasattr(result.data, 'questions') and result.data.questions.count() > 0:
+                output_validated = True
+
+        GenerationMetric.objects.create(
+            generation_type='quiz',
+            provider=result.provider_name or '',
+            success=result.success,
+            duration_ms=final_duration,
+            cache_hit=cache_hit,
+            error_message=(result.error or '')[:500] if not result.success else '',
+            output_length=output_length,
+            related_session=upload_session if isinstance(upload_session, UploadSession) else None,
+            output_validated=output_validated,
+            was_fallback=getattr(result, 'was_fallback', False) or False,
         )
 
-    with transaction.atomic():
-        quiz.questions.clear()
-        created_questions = Question.objects.bulk_create(questions_to_create)
-        quiz.questions.add(*created_questions)
-
-        quiz.status = Quiz.STATUS_COMPLETED
-        quiz.generated_at = timezone.now()
-        quiz.save(update_fields=["status", "generated_at"])
-
-    logger.info(
-        "Quiz %s generated for upload session %s with %s questions.",
-        quiz.id,
-        upload_session.id,
-        len(result.data[:10]),
-    )
-    return GenerationResult(
-        success=True,
-        data=quiz,
+    return result if result is not None else GenerationResult(
+        success=False,
+        error="Unknown error in quiz processing.",
         generation_type=GenerationType.QUIZ,
-        duration_ms=result.duration_ms,
     )
 
 
@@ -917,27 +1041,79 @@ def _process_recommendations_for_attempt(
         "recommendations", attempt.quiz.chapter_id or 0, _get_content_hash(answer_signature)
     )
     cached_recommendation = cache.get(rec_cache_key)
+    cache_hit = False
+    result = None
+
     if cached_recommendation:
+        cache_hit = True
         logger.info("[REC] Cache hit for attempt %s — returning cached recommendation.", attempt.id)
         attempt.ai_recommendation = cached_recommendation
         attempt.recommendation_status = QuizAttempt.RECOMMENDATION_COMPLETED
         attempt.save(update_fields=["ai_recommendation", "recommendation_status"])
-        return GenerationResult(
+        result = GenerationResult(
             success=True,
             data=cached_recommendation,
             generation_type=GenerationType.RECOMMENDATIONS,
+            provider_name='cache',
+            was_fallback=False,
+        )
+    else:
+        provider = get_generation_provider()
+        result = provider.generate_recommendations(attempt, questions_with_answers)
+
+        if result and result.success:
+            if isinstance(result.data, str) and len(result.data) > 50:
+                attempt.ai_recommendation = result.data
+                attempt.recommendation_status = QuizAttempt.RECOMMENDATION_COMPLETED
+                attempt.save(update_fields=["ai_recommendation", "recommendation_status"])
+                cache.set(rec_cache_key, result.data, timeout=60 * 60 * 24 * 7)
+                result = GenerationResult(
+                    success=True,
+                    data=result.data,
+                    generation_type=GenerationType.RECOMMENDATIONS,
+                    duration_ms=result.duration_ms,
+                    provider_name=result.provider_name,
+                    was_fallback=getattr(result, 'was_fallback', False) or False,
+                )
+            else:
+                error_msg = "Recommendation validation failed: output too short"
+                attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
+                attempt.recommendation_error = error_msg
+                attempt.save(update_fields=["recommendation_status", "recommendation_error"])
+                result = GenerationResult(
+                    success=False,
+                    error=error_msg,
+                    generation_type=GenerationType.RECOMMENDATIONS,
+                    duration_ms=result.duration_ms,
+                    provider_name=result.provider_name,
+                    was_fallback=getattr(result, 'was_fallback', False) or False,
+                )
+
+    # Instrument GenerationMetric at the very end
+    if result is not None:
+        output_length = len(result.data) if result.success and isinstance(result.data, str) else 0
+        output_validated = False
+        if result.success and result.generation_type == GenerationType.RECOMMENDATIONS:
+            output_validated = isinstance(result.data, str) and len(result.data) > 50
+
+        GenerationMetric.objects.create(
+            generation_type='recommendations',
+            provider=result.provider_name or '',
+            success=result.success,
+            duration_ms=result.duration_ms,
+            cache_hit=cache_hit,
+            error_message=(result.error or '')[:500] if not result.success else '',
+            output_length=output_length,
+            related_attempt=attempt,
+            output_validated=output_validated,
+            was_fallback=getattr(result, 'was_fallback', False) or False,
         )
 
-    provider = get_generation_provider()
-    result = provider.generate_recommendations(attempt, questions_with_answers)
-
-    if result.success:
-        attempt.ai_recommendation = result.data
-        attempt.recommendation_status = QuizAttempt.RECOMMENDATION_COMPLETED
-        attempt.save(update_fields=["ai_recommendation", "recommendation_status"])
-        cache.set(rec_cache_key, result.data, timeout=60 * 60 * 24 * 7)
-
-    return result
+    return result if result is not None else GenerationResult(
+        success=False,
+        error="Unknown error in recommendation processing.",
+        generation_type=GenerationType.RECOMMENDATIONS,
+    )
 
 
 def process_upload_session_simple(upload_session_id: int) -> dict:

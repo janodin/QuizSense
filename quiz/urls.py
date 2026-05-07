@@ -14,5 +14,7 @@ urlpatterns = [
     path('results/<int:attempt_id>/recommendation-status/', views.recommendation_status, name='recommendation_status'),
     path('review/<int:attempt_id>/', views.review_quiz, name='review_quiz'),
     path('evaluation/', views.evaluation, name='evaluation'),
+    path('system-health/', views.system_health, name='system_health'),
+    path('user-analytics/', views.user_analytics, name='user_analytics'),
 ]
 

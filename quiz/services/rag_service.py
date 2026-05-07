@@ -14,7 +14,7 @@ from typing import List, Generator, Tuple
 
 import numpy as np
 
-from ..models import TextbookChunk, UploadedChunk
+from ..models import TextbookChunk, UploadedChunk, RetrievalLog
 from .chunking_service import split_text_into_chunks
 from .embedding_service import embed_texts_batched
 
@@ -86,7 +86,7 @@ def _score_chunks_in_batches(
 
 def _get_top_k_chunks(query_np, chunks, top_k):
     """
-    Return top_k chunks by cosine similarity.
+    Return top_k (chunk, similarity) tuples by cosine similarity.
     Works for both in-memory (session) and paged (textbook) chunk lists.
     """
     if not chunks:
@@ -96,81 +96,144 @@ def _get_top_k_chunks(query_np, chunks, top_k):
         key=lambda x: x[1],
         reverse=True,
     )
-    top_ids = [id_ for id_, _ in ids_scores[:top_k]]
+    top_ids_scores = ids_scores[:top_k]
     id_to_chunk = {c.id: c for c in chunks}
-    return [id_to_chunk[id_] for id_ in top_ids if id_ in id_to_chunk]
+    result = []
+    for chunk_id, score in top_ids_scores:
+        if chunk_id in id_to_chunk:
+            result.append((id_to_chunk[chunk_id], float(score)))
+    return result
 
 
 # ─── Main retrieval API ───────────────────────────────────────────────────────
 
 def retrieve_context_for_session(upload_session, mode='quiz', quiz_top_k=8, summary_top_k=12):
-    query_text = _build_query_text(upload_session)
-    if not query_text.strip():
-        return {
-            'context_text': '',
-            'cross_reference_notes': 'No upload content was available to retrieve from.',
-            'session_chunks': [],
-            'textbook_chunks': [],
-        }
+    import time
+    start_time = time.perf_counter()
 
-    # Single short query — one embed_texts call (no batching needed).
-    embeddings = embed_texts_batched([query_text[:6000]], batch_size=1)
-    if not embeddings:
-        raise ValueError("AI embedding service failed to return vectors.")
+    query_text = ''
+    retrieved_chunks = []
+    session_chunk_count = 0
+    textbook_chunk_count = 0
+    all_top_scores = []
+    result = None
 
-    query_np = np.array(embeddings[0], dtype=np.float32)
-    del embeddings
-    import gc as gcmod
-    gcmod.collect()
+    try:
+        query_text = _build_query_text(upload_session)
+        if not query_text.strip():
+            result = {
+                'context_text': '',
+                'cross_reference_notes': 'No upload content was available to retrieve from.',
+                'session_chunks': [],
+                'textbook_chunks': [],
+            }
+            return result
 
-    if mode == 'summary':
-        session_k = 7
-        textbook_k = 5
-        top_k = summary_top_k
-    else:
-        session_k = 5
-        textbook_k = 3
-        top_k = quiz_top_k
+        # Single short query — one embed_texts call (no batching needed).
+        embeddings = embed_texts_batched([query_text[:6000]], batch_size=1)
+        if not embeddings:
+            raise ValueError("AI embedding service failed to return vectors.")
 
-    # ── Session chunks (normally small — load directly) ──────────────────────
-    raw_session_chunks = list(
-        UploadedChunk.objects.filter(upload_session=upload_session)
-        .only('id', 'content', 'embedding')
-        [:_SESSION_CHUNK_LIMIT]
-    )
-    valid_session_chunks = [c for c in raw_session_chunks if c.embedding]
-    session_chunks = _get_top_k_chunks(
-        query_np, valid_session_chunks, max(top_k, session_k)
-    )[:session_k]
+        query_np = np.array(embeddings[0], dtype=np.float32)
+        del embeddings
+        import gc as gcmod
+        gcmod.collect()
 
-    # ── Textbook chunks (sample subset to avoid loading thousands) ───────────
-    # We only need top_k matches — loading 200 chunks is more than enough.
-    textbook_records = list(
-        TextbookChunk.objects.filter(
-            chapter=upload_session.chapter
+        if mode == 'summary':
+            session_k = 7
+            textbook_k = 5
+            top_k = summary_top_k
+        else:
+            session_k = 5
+            textbook_k = 3
+            top_k = quiz_top_k
+
+        # ── Session chunks (normally small — load directly) ──────────────────
+        raw_session_chunks = list(
+            UploadedChunk.objects.filter(upload_session=upload_session)
+            .only('id', 'content', 'embedding')
+            [:_SESSION_CHUNK_LIMIT]
         )
-        .only('id', 'content', 'embedding', 'topic')
-        .order_by('?')[:200]  # random sample for diversity
-    )
-    valid_textbook_chunks = [c for c in textbook_records if c.embedding]
-    textbook_chunks = _get_top_k_chunks(
-        query_np, valid_textbook_chunks, max(top_k, textbook_k)
-    )[:textbook_k]
+        valid_session_chunks = [c for c in raw_session_chunks if c.embedding]
+        session_chunks_scored = _get_top_k_chunks(
+            query_np, valid_session_chunks, max(top_k, session_k)
+        )
+        session_chunks = [chunk for chunk, _ in session_chunks_scored[:session_k]]
+        session_chunk_count = len(session_chunks)
 
-    del query_np
-    gcmod.collect()
+        # ── Textbook chunks (sample subset to avoid loading thousands) ───────
+        textbook_records = list(
+            TextbookChunk.objects.filter(
+                chapter=upload_session.chapter
+            )
+            .only('id', 'content', 'embedding', 'topic')
+            .order_by('?')[:200]  # random sample for diversity
+        )
+        valid_textbook_chunks = [c for c in textbook_records if c.embedding]
+        textbook_chunks_scored = _get_top_k_chunks(
+            query_np, valid_textbook_chunks, max(top_k, textbook_k)
+        )
+        textbook_chunks = [chunk for chunk, _ in textbook_chunks_scored[:textbook_k]]
+        textbook_chunk_count = len(textbook_chunks)
 
-    context_lines = [
-        '[Session Upload Context]',
-        *[f"- {chunk.content}" for chunk in session_chunks],
-        '',
-        '[Textbook Reference Context]',
-        *[f"- {chunk.content}" for chunk in textbook_chunks],
-    ]
+        del query_np
+        gcmod.collect()
 
-    return {
-        'context_text': "\n".join(context_lines).strip(),
-        'cross_reference_notes': _cross_reference_textbook(textbook_chunks),
-        'session_chunks': session_chunks,
-        'textbook_chunks': textbook_chunks,
-    }
+        # Build log entries for every retrieved chunk
+        for rank, (chunk, score) in enumerate(session_chunks_scored[:session_k], start=1):
+            retrieved_chunks.append({
+                'id': chunk.id,
+                'source': 'session',
+                'similarity': round(score, 6),
+                'rank': rank,
+            })
+        for rank, (chunk, score) in enumerate(textbook_chunks_scored[:textbook_k], start=1):
+            retrieved_chunks.append({
+                'id': chunk.id,
+                'source': 'textbook',
+                'similarity': round(score, 6),
+                'rank': rank,
+            })
+
+        all_top_scores = (
+            [score for _, score in session_chunks_scored[:session_k]]
+            + [score for _, score in textbook_chunks_scored[:textbook_k]]
+        )
+
+        context_lines = [
+            '[Session Upload Context]',
+            *[f"- {chunk.content}" for chunk in session_chunks],
+            '',
+            '[Textbook Reference Context]',
+            *[f"- {chunk.content}" for chunk in textbook_chunks],
+        ]
+
+        result = {
+            'context_text': "\n".join(context_lines).strip(),
+            'cross_reference_notes': _cross_reference_textbook(textbook_chunks),
+            'session_chunks': session_chunks,
+            'textbook_chunks': textbook_chunks,
+        }
+        return result
+    finally:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        avg_sim = sum(all_top_scores) / len(all_top_scores) if all_top_scores else None
+        min_sim = min(all_top_scores) if all_top_scores else None
+        max_sim = max(all_top_scores) if all_top_scores else None
+        try:
+            RetrievalLog.objects.create(
+                upload_session=upload_session,
+                query_text=query_text[:6000],
+                mode=mode,
+                retrieved_chunks=retrieved_chunks,
+                session_chunk_count=session_chunk_count,
+                textbook_chunk_count=textbook_chunk_count,
+                avg_similarity_top_k=avg_sim,
+                min_similarity_top_k=min_sim,
+                max_similarity_top_k=max_sim,
+                retrieval_latency_ms=latency_ms,
+            )
+        except Exception as e:
+            # Never let logging break the retrieval pipeline, but record the failure
+            import logging
+            logging.getLogger(__name__).warning("Failed to create RetrievalLog: %s", e)

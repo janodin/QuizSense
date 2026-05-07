@@ -203,6 +203,7 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+CELERY_WORKER_POOL = 'solo'
 
 # ─── Memory-safety settings for Celery workers ───────────────────────────────
 # Restart workers after N tasks to prevent memory leaks from PyTorch/numpy.

@@ -248,9 +248,15 @@ class GenerationMetric(models.Model):
     success = models.BooleanField(default=False)
     duration_ms = models.FloatField(default=0)
     cache_hit = models.BooleanField(default=False)
+    output_validated = models.BooleanField(default=False, null=True)
+    output_length = models.PositiveIntegerField(default=0)
+    was_fallback = models.BooleanField(
+        default=False,
+        help_text="True if this generation required a fallback to a secondary provider"
+    )
     error_message = models.TextField(blank=True, null=True)
-    related_attempt = models.ForeignKey(QuizAttempt, on_delete=models.SET_NULL, null=True, blank=True)
-    related_session = models.ForeignKey(UploadSession, on_delete=models.SET_NULL, null=True, blank=True)
+    related_attempt = models.ForeignKey(QuizAttempt, on_delete=models.SET_NULL, null=True, blank=True, related_name='generation_metrics')
+    related_session = models.ForeignKey(UploadSession, on_delete=models.SET_NULL, null=True, blank=True, related_name='generation_metrics')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -263,4 +269,30 @@ class GenerationMetric(models.Model):
 
     def __str__(self):
         return f"{self.generation_type} — {self.provider or 'N/A'} — {'SUCCESS' if self.success else 'FAIL'}"
+
+
+class RetrievalLog(models.Model):
+    upload_session = models.ForeignKey(UploadSession, on_delete=models.CASCADE, related_name='retrieval_logs')
+    query_text = models.TextField()
+    mode = models.CharField(max_length=20, default='quiz')  # 'quiz' or 'summary'
+    # Store retrieved chunk info as JSON: list of {id, source, similarity, rank}
+    retrieved_chunks = models.JSONField(default=list)
+    session_chunk_count = models.PositiveIntegerField(default=0)
+    textbook_chunk_count = models.PositiveIntegerField(default=0)
+    avg_similarity_top_k = models.FloatField(null=True, blank=True)
+    min_similarity_top_k = models.FloatField(null=True, blank=True)
+    max_similarity_top_k = models.FloatField(null=True, blank=True)
+    retrieval_latency_ms = models.FloatField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['upload_session', 'created_at']),
+            models.Index(fields=['mode', 'created_at']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"RetrievalLog session={self.upload_session_id} mode={self.mode}"
 

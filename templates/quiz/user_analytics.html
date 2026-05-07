@@ -1,0 +1,370 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}User Analytics — QuizSense{% endblock %}
+
+{% block extra_css %}
+<style>
+  .eval-hero {
+    background: linear-gradient(135deg, #6f42c1 0%, #59359a 100%);
+    color: #fff;
+    border-radius: 1rem;
+    padding: 2.5rem 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 8px 24px rgba(111, 66, 193, 0.2);
+  }
+  .eval-hero h1 {
+    font-weight: 800;
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+  }
+  .eval-hero p {
+    opacity: 0.9;
+    margin-bottom: 0;
+    max-width: 700px;
+  }
+  .metric-card {
+    background: #fff;
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    border: 1px solid #e9ecef;
+    height: 100%;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+  }
+  .metric-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #6f42c1;
+    line-height: 1.2;
+  }
+  .metric-label {
+    font-size: 0.875rem;
+    color: #6c757d;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .section-header {
+    font-weight: 700;
+    font-size: 1.35rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #e9ecef;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .methodology-box {
+    background: #f8f9fa;
+    border-left: 4px solid #6f42c1;
+    padding: 1rem 1.25rem;
+    border-radius: 0 0.5rem 0.5rem 0;
+    font-size: 0.95rem;
+    color: #495057;
+  }
+  .chart-container {
+    position: relative;
+    height: 300px;
+    width: 100%;
+  }
+  .data-table th {
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #f8f9fa;
+  }
+  .data-table td, .data-table th {
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+  }
+  .badge-custom {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.35em 0.65em;
+    border-radius: 0.375rem;
+  }
+  .empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: #6c757d;
+  }
+  .empty-state i {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    display: block;
+  }
+  .dashboard-nav {
+    margin-bottom: 2rem;
+  }
+  .dashboard-nav .nav-link {
+    color: #495057;
+    font-weight: 500;
+  }
+  .dashboard-nav .nav-link.active {
+    background-color: #6f42c1;
+    color: #fff;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Cross-Dashboard Navigation -->
+<ul class="nav nav-pills dashboard-nav">
+  <li class="nav-item">
+    <a class="nav-link" href="{% url 'evaluation' %}">
+      <i class="bi bi-graph-up-arrow me-1"></i>Evaluation Dashboard
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="{% url 'system_health' %}">
+      <i class="bi bi-heart-pulse me-1"></i>System Health
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link active" href="{% url 'user_analytics' %}">
+      <i class="bi bi-people me-1"></i>User Analytics
+    </a>
+  </li>
+</ul>
+
+<!-- Hero Section -->
+<div class="eval-hero">
+  <h1><i class="bi bi-people me-2"></i>User Analytics Dashboard</h1>
+  <p>
+    User performance metrics and question quality proxies. These numbers reflect
+    how users interact with generated quizzes and should be interpreted with
+    caution — they are not ground-truth accuracy measures.
+  </p>
+</div>
+
+<!-- User Performance Section -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-person-check text-primary"></i>
+    User Performance
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> User performance is a noisy proxy for question
+    quality and should not be interpreted as ground truth. Well-calibrated
+    questions should produce a range of scores centered around 50–70%.
+    Extreme distributions may indicate questions that are too easy or too hard.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Avg. User Score</div>
+        <div class="metric-value">{{ avg_score_pct }}%</div>
+        <small class="text-muted">{{ avg_score|floatformat:1 }} / {{ avg_total|floatformat:0 }} questions</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Total Quiz Attempts</div>
+        <div class="metric-value">{{ total_attempts }}</div>
+        <small class="text-muted">Across all sessions</small>
+      </div>
+    </div>
+    <div class="col-lg-4 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Avg. Questions / Quiz</div>
+        <div class="metric-value">{{ avg_questions_per_quiz }}</div>
+        <small class="text-muted">Target: 10 MCQs</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-1">
+    <div class="col-12">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Score Distribution</h6>
+        <div class="chart-container">
+          <canvas id="scoreDistributionChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Question Quality Proxy Section -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-question-diamond text-primary"></i>
+    Question Quality Proxy
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> Topic-wise accuracy below 40% may indicate
+    questions that are misaligned with the source material or too difficult.
+    Topic-wise accuracy above 80% may indicate questions that are too easy or
+    contain obvious clues. Question topic distribution shows content diversity.
+  </p>
+
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Topic-wise Accuracy</h6>
+        <div class="chart-container">
+          <canvas id="topicAccuracyChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Question Topic Distribution</h6>
+        <div class="chart-container">
+          <canvas id="topicDistributionChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if topic_accuracy %}
+  <div class="row g-4 mt-1">
+    <div class="col-12">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Detailed Topic Accuracy</h6>
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr>
+                <th>Topic</th>
+                <th>Total Answers</th>
+                <th>Correct</th>
+                <th>Accuracy</th>
+                <th>Quality Indicator</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in topic_accuracy %}
+              <tr>
+                <td>{{ item.topic }}</td>
+                <td>{{ item.total }}</td>
+                <td>{{ item.correct }}</td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="progress flex-grow-1" style="height: 8px; max-width: 120px;">
+                      <div class="progress-bar {% if item.accuracy >= 70 %}bg-success{% elif item.accuracy >= 40 %}bg-warning{% else %}bg-danger{% endif %}"
+                           role="progressbar" style="width: {{ item.accuracy }}%"></div>
+                    </div>
+                    <span class="small fw-bold">{{ item.accuracy }}%</span>
+                  </div>
+                </td>
+                <td>
+                  {% if item.accuracy >= 70 %}
+                    <span class="badge bg-success badge-custom">Well Calibrated</span>
+                  {% elif item.accuracy >= 40 %}
+                    <span class="badge bg-warning text-dark badge-custom">Moderate</span>
+                  {% else %}
+                    <span class="badge bg-danger badge-custom">Review Needed</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { usePointStyle: true, padding: 16, font: { size: 12 } }
+      }
+    }
+  };
+
+  // Score Distribution (Bar)
+  new Chart(document.getElementById('scoreDistributionChart'), {
+    type: 'bar',
+    data: {
+      labels: ['0-20%', '21-40%', '41-60%', '61-80%', '81-100%'],
+      datasets: [{
+        label: 'Number of Attempts',
+        data: [
+          {{ score_buckets.0_20 }},
+          {{ score_buckets.21_40 }},
+          {{ score_buckets.41_60 }},
+          {{ score_buckets.61_80 }},
+          {{ score_buckets.81_100 }}
+        ],
+        backgroundColor: ['#dc3545', '#fd7e14', '#ffc107', '#198754', '#0d6efd'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#f0f0f0' } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+
+  // Topic Accuracy (Bar Horizontal)
+  {% if topic_accuracy %}
+  new Chart(document.getElementById('topicAccuracyChart'), {
+    type: 'bar',
+    data: {
+      labels: [{% for t in topic_accuracy %}'{{ t.topic|escapejs }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+      datasets: [{
+        label: 'Accuracy (%)',
+        data: [{% for t in topic_accuracy %}{{ t.accuracy }}{% if not forloop.last %}, {% endif %}{% endfor %}],
+        backgroundColor: [{% for t in topic_accuracy %}{% if t.accuracy >= 70 %}'#198754'{% elif t.accuracy >= 40 %}'#ffc107'{% else %}'#dc3545'{% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      ...commonOptions,
+      scales: {
+        x: { min: 0, max: 100, grid: { color: '#f0f0f0' } },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+  {% else %}
+  document.getElementById('topicAccuracyChart').parentElement.innerHTML =
+    '<div class="empty-state"><i class="bi bi-inbox"></i><p>No topic accuracy data available.</p></div>';
+  {% endif %}
+
+  // Topic Distribution (Pie)
+  {% if topic_distribution %}
+  new Chart(document.getElementById('topicDistributionChart'), {
+    type: 'pie',
+    data: {
+      labels: [{% for t in topic_distribution %}'{{ t.topic|escapejs }}'{% if not forloop.last %}, {% endif %}{% endfor %}],
+      datasets: [{
+        data: [{% for t in topic_distribution %}{{ t.count }}{% if not forloop.last %}, {% endif %}{% endfor %}],
+        backgroundColor: [
+          '#0d6efd', '#6610f2', '#6f42c1', '#d63384', '#dc3545',
+          '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0'
+        ]
+      }]
+    },
+    options: commonOptions
+  });
+  {% else %}
+  document.getElementById('topicDistributionChart').parentElement.innerHTML =
+    '<div class="empty-state"><i class="bi bi-inbox"></i><p>No question data available.</p></div>';
+  {% endif %}
+</script>
+{% endblock %}
