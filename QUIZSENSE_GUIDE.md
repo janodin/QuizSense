@@ -678,6 +678,7 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 ### Q: How is the system optimized for low-memory servers?
 
 **A:** Several optimizations are in place:
+
 - Embedding model uses int8 quantization (reduces memory by ~75%)
 - Model is lazy-loaded and evicted after 120 seconds of idle time
 - Textbook chunk scoring is done in paged batches to bound memory
@@ -694,6 +695,7 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 ### Q: How does the system prevent abuse and ensure reliability?
 
 **A:** Multiple layers of protection:
+
 - **Rate Limiting**: Polling endpoints limited to 1 request per 2 seconds per session
 - **Duplicate Prevention**: Quiz generation checks for existing processing/completed quizzes
 - **GZip Compression**: Reduces bandwidth usage by 60-80%
@@ -704,7 +706,8 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 ### Q: What security measures are in place?
 
-**A:** 
+**A:**
+
 - **XSS Protection**: DOMPurify sanitizes all AI-generated HTML before rendering
 - **Rate Limiting**: Prevents endpoint abuse and excessive database queries
 - **Session Validation**: All endpoints verify session ownership
@@ -716,6 +719,7 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 ### Q: How are the analytics dashboards optimized?
 
 **A:** All three dashboards (Evaluation, System Health, User Analytics) use:
+
 - **5-minute cache TTL**: Repeated visits hit Redis instead of database
 - **Aggregated queries**: Database-level aggregation instead of Python loops
 - **Database indexes**: Optimized indexes on frequently queried fields
