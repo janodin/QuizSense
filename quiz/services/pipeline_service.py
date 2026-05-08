@@ -249,6 +249,167 @@ class GeminiProvider(AIProvider):
         return "gemini"
 
 
+class GroqProvider(AIProvider):
+    """Uses Groq API with gpt-oss-120B model (high reasoning)."""
+    def __init__(self):
+        self._url = "https://api.groq.com/openai/v1/chat/completions"
+        self._model = "openai/gpt-oss-120b"
+
+    def _make_request(self, prompt: str, max_tokens: int = 1024, timeout: int = 120) -> str:
+        import json
+        import time
+        import requests
+        from django.conf import settings
+
+        start_time = time.time()
+        logger.info("[GROQ] Sending request (prompt_length=%d, max_tokens=%d, timeout=%d)", len(prompt), max_tokens, timeout)
+
+        headers = {
+            "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT + "\n\nReasoning: high"},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        }
+
+        try:
+            response = requests.post(self._url, headers=headers, json=payload, timeout=timeout)
+            elapsed = time.time() - start_time
+            logger.info("[GROQ] Response received in %.1fs (status=%d)", elapsed, response.status_code)
+        except requests.exceptions.Timeout:
+            logger.error("[GROQ] Request timed out after %ds", timeout)
+            raise ValueError(f"Groq API request timed out after {timeout} seconds")
+        except requests.exceptions.ConnectionError as e:
+            logger.error("[GROQ] Connection error: %s", e)
+            raise ValueError(f"Groq API connection error: {e}")
+
+        if response.status_code != 200:
+            try:
+                error_data = response.json()
+                msg = error_data.get("error", {}).get("message") or response.text
+            except Exception:
+                msg = response.text
+            logger.error("[GROQ] API error (status=%d): %s", response.status_code, msg)
+            raise ValueError(f"Groq API error ({response.status_code}): {msg}")
+
+        try:
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            if not content:
+                raise ValueError("Groq returned empty response")
+            return content
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
+            logger.error("[GROQ] Failed to parse response: %s", e)
+            raise ValueError(f"Groq response parsing failed: {e}")
+
+    def generate_summary(
+        self, text: str, chapter_title: str, cross_reference_notes: str
+    ) -> str:
+        prompt = (
+            "You are an expert programming instructor. Based on the context below, "
+            "write a polished, richly-formatted study summary in 180-260 words.\n\n"
+            f"Chapter: {chapter_title}\n\n"
+            f"Context:\n{text[:12000]}\n\n"
+            f"Cross-Reference Notes:\n{cross_reference_notes or 'N/A'}\n\n"
+            "Formatting rules (IMPORTANT):\n"
+            "- Wrap every programming keyword, function name, variable, syntax, or code snippet in backticks, e.g. `for`, `while`, `print()`, `x = 5`, `if-else`.\n"
+            "- Use **bold** for emphasis on critical terms and section labels.\n"
+            "- Use a clean Markdown structure with headings and bullet lists.\n\n"
+            "Use this exact Markdown structure:\n"
+            "## Study Summary\n"
+            "### Overview\n"
+            "Write 2-3 clear sentences explaining the main idea of the material. Use backticks for any code mentioned.\n\n"
+            "### Key Concepts\n"
+            "- **Concept name**: Explanation with `code` keywords highlighted.\n"
+            "- **Another concept**: Explanation with `code` keywords highlighted.\n\n"
+            "### Review Focus\n"
+            "- **Label**: Actionable item with `code` keywords where relevant.\n"
+            "- **Label**: Another actionable item with `code` keywords.\n\n"
+            "Return only the study summary Markdown now:"
+        )
+        return self._make_request(prompt, max_tokens=1024)
+
+    def extract_concepts(self, text: str) -> str:
+        prompt = (
+            "You are analyzing a section of a programming textbook. "
+            "Read the text carefully and extract the key information.\n\n"
+            f"Text:\n{text[:12000]}\n\n"
+            "Extract and list:\n"
+            "1. Key concepts and definitions mentioned\n"
+            "2. Important code patterns, algorithms, or techniques\n"
+            "3. Best practices, rules, warnings, or common mistakes\n"
+            "4. Topics covered in this section\n\n"
+            "Be thorough but concise. Return as plain text."
+        )
+        return self._make_request(prompt, max_tokens=1024)
+
+    def generate_mcq(
+        self, text: str, chapter_title: str, cross_reference_notes: str
+    ) -> list:
+        import json
+        import re
+
+        prompt = (
+            "You are an expert programming instructor. Generate exactly 10 MCQs as a JSON array.\n\n"
+            f"Chapter: {chapter_title}\n\n"
+            f"Retrieved Context:\n{text[:6000]}\n\n"
+            f"Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes or 'N/A'}\n\n"
+            'Return ONLY a valid JSON array. Each object: {"question", "choices":{"A","B","C","D"}, "correct_answer", "topic"}\n\n'
+            'IMPORTANT: Do NOT include any reasoning, thinking, or explanation. Output ONLY the JSON array.'
+        )
+        raw = self._make_request(prompt, max_tokens=4096)
+
+        # Strip reasoning/thinking tags that gpt-oss outputs with high reasoning
+        cleaned = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
+        cleaned = re.sub(r'<reasoning>.*?</reasoning>', '', cleaned, flags=re.DOTALL)
+        cleaned = re.sub(r'```(?:json)?\s*', '', cleaned).strip().strip('`')
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start == -1 or end == -1:
+            raise ValueError(f"AI Response parsing failed. Raw starts with: {raw[:100]}")
+
+        questions = json.loads(cleaned[start:end + 1])
+        return questions[:10]
+
+    def generate_recommendations(
+        self, quiz_attempt: QuizAttempt, questions_with_answers: list
+    ) -> str:
+        chapter_title = (
+            quiz_attempt.quiz.chapter.title if quiz_attempt.quiz.chapter else "Fundamentals"
+        )
+
+        topic_lines = []
+        wrong_lines = []
+        for qa in questions_with_answers:
+            topic_lines.append(f"  - [{qa['topic']}] {qa['question'][:120]}...")
+            if not qa['is_correct']:
+                wrong_lines.append(
+                    f"  - Topic: {qa['topic']} | Q: {qa['question'][:100]}... "
+                    f"| Correct: {qa['correct_answer']} | Student answered: {qa['selected_answer']}"
+                )
+
+        topic_summary = "\n".join(topic_lines) or "  (no data)"
+        wrong_summary = "\n".join(wrong_lines) or "  (all correct!)"
+
+        prompt = (
+            f"You are an expert programming instructor. Provide 3-4 concise, actionable study recommendations "
+            f"for a student who scored {quiz_attempt.score}/{quiz_attempt.total_questions} on \"{chapter_title}\".\n\n"
+            f"--- All Questions ---\n{topic_summary}\n\n"
+            f"--- Incorrect Answers ---\n{wrong_summary}\n\n"
+            f"Focus on the weak topics and explain what the student should study to improve."
+        )
+        return self._make_request(prompt, timeout=90)
+
+    def get_provider_name(self) -> str:
+        return "groq"
+
+
 class MiniMaxProvider(AIProvider):
     def __init__(self):
         self._url = "https://api.minimax.io/anthropic/v1/messages"
@@ -571,7 +732,7 @@ def get_generation_provider() -> MultiProvider:
         with _provider_lock:
             if _default_provider is None:
                 _default_provider = MultiProvider().add_provider(
-                    MiniMaxProvider()
+                    GroqProvider()
                 ).add_provider(GeminiProvider())
     return _default_provider
 

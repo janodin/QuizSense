@@ -196,6 +196,9 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 # MiniMax API
 MINIMAX_API_KEY = os.getenv('MINIMAX_API_KEY', '')
 
+# Groq API (gpt-oss-120B with high reasoning)
+GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
+
 # Google Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
 
