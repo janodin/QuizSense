@@ -106,7 +106,7 @@ The system is designed for **Fundamentals of Programming** with these chapters:
 | **Cache & Broker** | Redis 5.2.1 | Caching, task brokering, embedding cache |
 | **Database** | PostgreSQL | Primary data storage |
 | **Embeddings** | sentence-transformers (all-MiniLM-L6-v2) | Text-to-vector conversion (384 dimensions) |
-| **AI Language Model** | MiniMax M2.7 (primary), Groq gpt-oss-120B, Gemini 2.5 Flash Lite (fallbacks) | Summary, quiz, and recommendation generation |
+| **AI Language Model** | Groq gpt-oss-120B (high reasoning) | Summary, quiz, and recommendation generation |
 | **PDF Processing** | PyMuPDF (fitz) | Text extraction from PDFs |
 | **Word Processing** | python-docx | Text extraction from DOCX files |
 | **OCR** | Tesseract + pdf2image | Text extraction from scanned PDFs (fallback) |
@@ -449,8 +449,8 @@ QuizSense uses **session-based ownership** (no login required):
 - Study summary from uploaded content
 - 10-question multiple-choice quiz
 - Personalized topic recommendations after quiz
-- Primary AI provider with automatic fallback
-- System prompts for better instruction adherence and 15-30% token cost reduction
+- Powered by Groq gpt-oss-120B with high reasoning capability
+- System prompts for better instruction adherence and token optimization
 
 ### Quiz System
 - Interactive quiz UI with progress indicator
@@ -476,7 +476,7 @@ QuizSense uses **session-based ownership** (no login required):
 - DOMPurify sanitization for AI-generated HTML (XSS protection)
 - Rate limiting on polling endpoints
 - GZip compression enabled
-- System prompts for AI providers
+- System prompts for AI provider
 - Session-based ownership with validation
 
 ### Analytics & Monitoring
@@ -572,7 +572,7 @@ Shows database-aggregated operational metrics:
 - Embedding coverage percentage
 - Topic coverage percentage
 - Pipeline success rates (summary, quiz, recommendations)
-- Provider usage distribution
+- AI generation duration averages
 - Top 5 error messages (quiz & session failures)
 
 ### RAG Evaluation Dashboard (`/evaluation/`)
@@ -582,7 +582,6 @@ Shows retrieval quality metrics:
 - Average similarity scores
 - Retrieval latency statistics
 - Mode distribution (summary vs quiz)
-- Provider success rates
 - Generation duration averages
 
 ### User Analytics Dashboard (`/user-analytics/`)
@@ -637,7 +636,7 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 - **Database Indexes**: 20+ indexes on frequently queried fields
 - **Query Optimization**: `.only()`, `.select_related()`, and aggregated queries
 - **RAG Cache-First**: Cache check before expensive retrieval operations
-- **System Prompts**: 15-30% token cost reduction via prompt caching
+- **System Prompts**: Token cost reduction via prompt caching
 - **DOMPurify**: Client-side XSS protection for AI-generated content
 
 ---
@@ -648,9 +647,9 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 **A:** The system uses a RAG (Retrieval-Augmented Generation) pipeline. When a user uploads lecture files, the text is extracted, chunked into 500-word segments, and converted into vector embeddings. These embeddings are compared against both the uploaded content and a pre-seeded textbook knowledge base using cosine similarity. The most relevant chunks are retrieved and sent as context to an AI language model, which generates 10 multiple-choice questions in JSON format.
 
-### Q: What happens if the AI provider fails?
+### Q: What AI model does the system use?
 
-**A:** The system uses a multi-provider architecture with automatic fallback. If the primary AI provider fails or returns invalid output, the system automatically switches to a fallback provider. This ensures reliability even if one service is unavailable.
+**A:** The system uses Groq's gpt-oss-120B model with high reasoning capability. This is a 120-billion parameter open-weight model designed for powerful reasoning and complex tasks. It delivers responses in approximately 1-3 seconds, making it significantly faster than comparable models.
 
 ### Q: How does the system handle scanned PDFs?
 
@@ -699,7 +698,7 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 - **Duplicate Prevention**: Quiz generation checks for existing processing/completed quizzes
 - **GZip Compression**: Reduces bandwidth usage by 60-80%
 - **Cache-First Architecture**: RAG retrieval skipped on cache hits, saving 200-500ms
-- **System Prompts**: AI providers use cached system prompts for 15-30% token cost reduction
+- **System Prompts**: AI provider uses cached system prompts for token cost reduction
 - **DOMPurify**: Client-side sanitization prevents XSS from AI-generated content
 - **Database Indexes**: 20+ indexes optimize query performance and reduce load
 
