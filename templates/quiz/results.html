@@ -368,7 +368,10 @@
     if (raw) {
         const html = marked.parse(raw);
         const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = html;
+        tempDiv.innerHTML = DOMPurify.sanitize(html, {
+            ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre', 'blockquote', 'br', 'a', 'hr'],
+            ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
+        });
         const firstHeading = tempDiv.querySelector('h1, h2, h3, h4');
         if (firstHeading) firstHeading.remove();
         document.getElementById('recommendation-body').innerHTML = tempDiv.innerHTML;
@@ -393,7 +396,10 @@
                         // Content available — render it regardless of status string
                         const html = marked.parse(data.recommendation_html);
                         const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = html;
+                        tempDiv.innerHTML = DOMPurify.sanitize(html, {
+                            ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre', 'blockquote', 'br', 'a', 'hr'],
+                            ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
+                        });
                         const firstHeading = tempDiv.querySelector('h1, h2, h3, h4');
                         if (firstHeading) firstHeading.remove();
                         document.getElementById('recommendation-body').innerHTML = tempDiv.innerHTML;

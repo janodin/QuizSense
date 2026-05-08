@@ -2,14 +2,33 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponseForbidden, JsonResponse
 from django.contrib import messages
 from django.utils import timezone
-from django.db.models import Avg, Count, Q, F, StdDev, FloatField, Sum
-from django.db.models.functions import Cast
+from django.db import transaction
+from django.db.models import Avg, Count, Q, F, Sum, FloatField
+from django.db.models.functions import Cast, Extract
+from django.views.decorators.cache import cache_page
+from django.views.decorators.vary import vary_on_cookie
+from django.views.decorators.http import require_GET
+from django.views.decorators.cache import never_cache
+import time
 from .models import Chapter, Topic, UploadSession, UploadedFile, Question, Quiz, QuizAttempt, QuizAnswer, TextbookChunk, UploadedChunk, GenerationMetric, RetrievalLog
 from .forms import MultiFileUploadForm
 from .services.pipeline_service import (
     queue_upload_session_processing,
     queue_quiz_generation,
 )
+
+
+_rate_limit_store = {}
+
+
+def _rate_limit(key, interval=2):
+    """Return True if the request is allowed, False if rate limited."""
+    now = time.monotonic()
+    last = _rate_limit_store.get(key)
+    if last is not None and (now - last) < interval:
+        return False
+    _rate_limit_store[key] = now
+    return True
 
 
 def _get_session_key(request):
@@ -166,7 +185,12 @@ def study_summary(request, upload_session_id):
     })
 
 
+@require_GET
+@never_cache
 def upload_session_status(request, upload_session_id):
+    session_key = _get_session_key(request)
+    if not _rate_limit(f"upload_session_status:{session_key}"):
+        return JsonResponse({"status": "throttled"}, status=429)
     upload_session = get_object_or_404(UploadSession, id=upload_session_id)
     if not _check_ownership(request, upload_session):
         return HttpResponseForbidden("You do not have access to this upload session.")
@@ -203,6 +227,11 @@ def generate_quiz(request, upload_session_id):
         messages.error(request, "No text could be extracted from the uploaded files.")
         return redirect('home')
 
+    # Prevent duplicate quiz generation - check for existing active quizzes
+    processing_quiz = Quiz.objects.filter(upload_session=upload_session, status=Quiz.STATUS_PROCESSING).first()
+    if processing_quiz:
+        return redirect('quiz_waiting', quiz_id=processing_quiz.id)
+
     existing_quiz = Quiz.objects.filter(upload_session=upload_session, status=Quiz.STATUS_COMPLETED).first()
     if existing_quiz:
         return redirect('take_quiz', quiz_id=existing_quiz.id)
@@ -230,8 +259,13 @@ def quiz_waiting(request, quiz_id):
     return render(request, 'quiz/quiz_waiting.html', {'quiz': quiz})
 
 
+@require_GET
+@never_cache
 def quiz_status(request, quiz_id):
     """Return quiz generation status as JSON for polling."""
+    session_key = _get_session_key(request)
+    if not _rate_limit(f"quiz_status:{session_key}"):
+        return JsonResponse({"status": "throttled"}, status=429)
     quiz = get_object_or_404(Quiz, id=quiz_id)
     if quiz.upload_session and not _check_ownership(request, quiz.upload_session):
         return HttpResponseForbidden("You do not have access to this quiz.")
@@ -263,7 +297,7 @@ def submit_quiz(request, quiz_id):
     if quiz.status != Quiz.STATUS_COMPLETED:
         messages.error(request, "This quiz is not ready for submission.")
         return redirect('take_quiz', quiz_id=quiz_id)
-    questions = list(quiz.questions.select_related('topic', 'chapter').all())
+    questions = list(quiz.questions.only('id', 'correct_answer').order_by('id'))
 
     if not request.session.session_key:
         request.session.create()
@@ -286,28 +320,31 @@ def submit_quiz(request, quiz_id):
         )
         return redirect('take_quiz', quiz_id=quiz_id)
 
-    attempt = QuizAttempt.objects.create(
-        quiz=quiz,
-        session_key=request.session.session_key or '',
-        total_questions=len(questions),
-        recommendation_status=QuizAttempt.RECOMMENDATION_PROCESSING,
-    )
-
-    score = 0
-    for question, selected in validated_answers:
-        is_correct = selected == question.correct_answer
-        if is_correct:
-            score += 1
-        QuizAnswer.objects.create(
-            attempt=attempt,
-            question=question,
-            selected_answer=selected,
-            is_correct=is_correct,
+    with transaction.atomic():
+        attempt = QuizAttempt.objects.create(
+            quiz=quiz,
+            session_key=request.session.session_key or '',
+            total_questions=len(questions),
+            recommendation_status=QuizAttempt.RECOMMENDATION_PROCESSING,
         )
 
-    attempt.score = score
-    attempt.completed_at = timezone.now()
-    attempt.save()
+        score = 0
+        answers_to_create = []
+        for question, selected in validated_answers:
+            is_correct = selected == question.correct_answer
+            if is_correct:
+                score += 1
+            answers_to_create.append(QuizAnswer(
+                attempt=attempt,
+                question=question,
+                selected_answer=selected,
+                is_correct=is_correct,
+            ))
+
+        QuizAnswer.objects.bulk_create(answers_to_create)
+        attempt.score = score
+        attempt.completed_at = timezone.now()
+        attempt.save(update_fields=["score", "completed_at"])
 
     # Queue recommendations asynchronously so the user isn't blocked
     # waiting for the AI API call (10-30s) before seeing results.
@@ -346,8 +383,13 @@ def review_quiz(request, attempt_id):
     return render(request, 'quiz/review.html', {'attempt': attempt, 'answers': answers})
 
 
+@require_GET
+@never_cache
 def recommendation_status(request, attempt_id):
     """Return recommendation generation status as JSON for polling."""
+    session_key = _get_session_key(request)
+    if not _rate_limit(f"recommendation_status:{session_key}"):
+        return JsonResponse({"status": "throttled"}, status=429)
     attempt = get_object_or_404(QuizAttempt, id=attempt_id)
     if not _check_ownership(request, attempt):
         return HttpResponseForbidden("You do not have access to this attempt.")
@@ -359,100 +401,116 @@ def recommendation_status(request, attempt_id):
     })
 
 
+@cache_page(300)
+@vary_on_cookie
 def evaluation(request):
     """
     Pure Evaluation Dashboard.
     Research-oriented metrics for RAG retrieval quality and model generation quality.
+    Optimized to use database-level aggregation instead of Python loops.
     """
     # ─── RAG Retrieval Evaluation ─────────────────────────────────────────────
-    total_retrieval_logs = RetrievalLog.objects.count()
-    avg_retrieval_latency = RetrievalLog.objects.aggregate(avg=Avg('retrieval_latency_ms'))['avg']
-
-    weighted = RetrievalLog.objects.exclude(avg_similarity_top_k=None).annotate(
-        total_chunks=F('session_chunk_count') + F('textbook_chunk_count'),
-        weighted_sim=Cast(F('avg_similarity_top_k') * F('total_chunks'), output_field=FloatField())
-    ).aggregate(sum_w=Sum('weighted_sim'), sum_k=Sum('total_chunks'))
-
-    avg_top_k_similarity = None
-    if weighted['sum_k']:
-        avg_top_k_similarity = weighted['sum_w'] / weighted['sum_k']
-
-    cross_source_count = RetrievalLog.objects.filter(
-        session_chunk_count__gt=0, textbook_chunk_count__gt=0
-    ).count()
-
-    active_logs = RetrievalLog.objects.filter(
-        Q(session_chunk_count__gt=0) | Q(textbook_chunk_count__gt=0)
+    retrieval_stats = RetrievalLog.objects.aggregate(
+        total=Count('id'),
+        avg_latency=Avg('retrieval_latency_ms'),
+        cross_source=Count('id', filter=Q(session_chunk_count__gt=0, textbook_chunk_count__gt=0)),
+        active=Count('id', filter=Q(Q(session_chunk_count__gt=0) | Q(textbook_chunk_count__gt=0))),
+        sum_w=Sum(Cast(F('avg_similarity_top_k') * (F('session_chunk_count') + F('textbook_chunk_count')), output_field=FloatField()),
+                  filter=Q(avg_similarity_top_k__isnull=False)),
+        sum_k=Sum(F('session_chunk_count') + F('textbook_chunk_count'), filter=Q(avg_similarity_top_k__isnull=False)),
+        # Similarity buckets
+        bucket_negative=Count('id', filter=Q(avg_similarity_top_k__lt=0)),
+        bucket_0_02=Count('id', filter=Q(avg_similarity_top_k__gte=0, avg_similarity_top_k__lt=0.2)),
+        bucket_02_04=Count('id', filter=Q(avg_similarity_top_k__gte=0.2, avg_similarity_top_k__lt=0.4)),
+        bucket_04_06=Count('id', filter=Q(avg_similarity_top_k__gte=0.4, avg_similarity_top_k__lt=0.6)),
+        bucket_06_08=Count('id', filter=Q(avg_similarity_top_k__gte=0.6, avg_similarity_top_k__lt=0.8)),
+        bucket_08_10=Count('id', filter=Q(avg_similarity_top_k__gte=0.8, avg_similarity_top_k__lte=1.0)),
+        bucket_gt_1=Count('id', filter=Q(avg_similarity_top_k__gt=1.0)),
     )
+
+    total_retrieval_logs = retrieval_stats['total']
+    avg_retrieval_latency = retrieval_stats['avg_latency']
+    
+    avg_top_k_similarity = None
+    if retrieval_stats['sum_k']:
+        avg_top_k_similarity = retrieval_stats['sum_w'] / retrieval_stats['sum_k']
+
     cross_source_rate = None
-    if active_logs.exists():
-        cross_source_rate = (cross_source_count / active_logs.count()) * 100
+    if retrieval_stats['active']:
+        cross_source_rate = (retrieval_stats['cross_source'] / retrieval_stats['active']) * 100
 
     has_retrieval_logs = total_retrieval_logs > 0
 
-    similarity_buckets = {'bucket_0_02': 0, 'bucket_02_04': 0, 'bucket_04_06': 0, 'bucket_06_08': 0, 'bucket_08_10': 0, 'bucket_negative': 0, 'bucket_gt_1': 0}
-    for val in RetrievalLog.objects.exclude(avg_similarity_top_k=None).values_list('avg_similarity_top_k', flat=True):
-        if val is None:
-            continue
-        elif val < 0:
-            similarity_buckets['bucket_negative'] += 1
-        elif val > 1.0:
-            similarity_buckets['bucket_gt_1'] += 1
-        elif val < 0.2:
-            similarity_buckets['bucket_0_02'] += 1
-        elif val < 0.4:
-            similarity_buckets['bucket_02_04'] += 1
-        elif val < 0.6:
-            similarity_buckets['bucket_04_06'] += 1
-        elif val < 0.8:
-            similarity_buckets['bucket_06_08'] += 1
-        else:
-            similarity_buckets['bucket_08_10'] += 1
+    similarity_buckets = {
+        'bucket_negative': retrieval_stats['bucket_negative'],
+        'bucket_0_02': retrieval_stats['bucket_0_02'],
+        'bucket_02_04': retrieval_stats['bucket_02_04'],
+        'bucket_04_06': retrieval_stats['bucket_04_06'],
+        'bucket_06_08': retrieval_stats['bucket_06_08'],
+        'bucket_08_10': retrieval_stats['bucket_08_10'],
+        'bucket_gt_1': retrieval_stats['bucket_gt_1'],
+    }
 
     # ─── Model Generation Evaluation ──────────────────────────────────────────
+    # Single grouped query for generation type stats
+    type_stats_qs = GenerationMetric.objects.values('generation_type').annotate(
+        total=Count('id'),
+        success_count=Count('id', filter=Q(success=True)),
+        avg_duration=Avg('duration_ms'),
+        cache_hit_count=Count('id', filter=Q(cache_hit=True)),
+        validated_count=Count('id', filter=Q(output_validated=True)),
+        avg_output_length=Avg('output_length'),
+    )
+    
     metric_stats = {}
-    for gtype, label in GenerationMetric.GENERATION_TYPE_CHOICES:
-        qs = GenerationMetric.objects.filter(generation_type=gtype)
-        total = qs.count()
-        if total == 0:
-            continue
-        stats = qs.aggregate(
-            success_count=Count('id', filter=Q(success=True)),
-            avg_duration=Avg('duration_ms'),
-            cache_hit_count=Count('id', filter=Q(cache_hit=True)),
-            validated_count=Count('id', filter=Q(output_validated=True)),
-            avg_output_length=Avg('output_length'),
-        )
+    for row in type_stats_qs:
+        gtype = row['generation_type']
+        total = row['total']
         metric_stats[gtype] = {
             'total': total,
-            'success_rate': (stats['success_count'] / total * 100),
-            'avg_duration': stats['avg_duration'] or 0,
-            'cache_hit_rate': (stats['cache_hit_count'] / total * 100),
-            'validation_pass_rate': (stats['validated_count'] / total * 100),
-            'avg_output_length': stats['avg_output_length'] or 0,
+            'success_rate': (row['success_count'] / total * 100) if total else 0,
+            'avg_duration': row['avg_duration'] or 0,
+            'cache_hit_rate': (row['cache_hit_count'] / total * 100) if total else 0,
+            'validation_pass_rate': (row['validated_count'] / total * 100) if total else 0,
+            'avg_output_length': row['avg_output_length'] or 0,
         }
 
+    # Single grouped query for provider stats
+    provider_qs = GenerationMetric.objects.values('provider').annotate(
+        total=Count('id'),
+        success_count=Count('id', filter=Q(success=True)),
+    )
     provider_success = {}
-    for provider_code, provider_label in GenerationMetric.PROVIDER_CHOICES:
-        qs = GenerationMetric.objects.filter(provider=provider_code)
-        provider_success[provider_code] = {
-            'label': provider_label,
-            'total': qs.count(),
-            'success_rate': (qs.filter(success=True).count() / qs.count() * 100) if qs.exists() else 0,
+    for row in provider_qs:
+        code = row['provider']
+        total = row['total']
+        provider_success[code] = {
+            'label': dict(GenerationMetric.PROVIDER_CHOICES).get(code, code.title()),
+            'total': total,
+            'success_rate': (row['success_count'] / total * 100) if total else 0,
         }
 
-    fallback_count = GenerationMetric.objects.filter(was_fallback=True).count()
-    total_generation_attempts = GenerationMetric.objects.exclude(provider='cache').count()
-
+    # Fallback rate in one query
+    fallback_stats = GenerationMetric.objects.aggregate(
+        fallback_count=Count('id', filter=Q(was_fallback=True)),
+        total_attempts=Count('id', filter=~Q(provider='cache')),
+    )
     fallback_rate = None
-    if total_generation_attempts > 0:
-        fallback_rate = (fallback_count / total_generation_attempts) * 100
+    if fallback_stats['total_attempts'] > 0:
+        fallback_rate = (fallback_stats['fallback_count'] / fallback_stats['total_attempts']) * 100
 
-    quiz_qs = GenerationMetric.objects.filter(generation_type='quiz', output_length__gt=0)
-    quiz_validation_pass_rate = (quiz_qs.filter(output_validated=True).count() / quiz_qs.count() * 100) if quiz_qs.exists() else None
+    # Quiz and Summary validation in single aggregates
+    quiz_stats = GenerationMetric.objects.filter(generation_type='quiz', output_length__gt=0).aggregate(
+        total=Count('id'),
+        validated=Count('id', filter=Q(output_validated=True)),
+    )
+    quiz_validation_pass_rate = (quiz_stats['validated'] / quiz_stats['total'] * 100) if quiz_stats['total'] else None
 
-    summary_qs = GenerationMetric.objects.filter(generation_type='summary', output_length__gt=0)
-    summary_validation_pass_rate = (summary_qs.filter(output_validated=True).count() / summary_qs.count() * 100) if summary_qs.exists() else None
+    summary_stats = GenerationMetric.objects.filter(generation_type='summary', output_length__gt=0).aggregate(
+        total=Count('id'),
+        validated=Count('id', filter=Q(output_validated=True)),
+    )
+    summary_validation_pass_rate = (summary_stats['validated'] / summary_stats['total'] * 100) if summary_stats['total'] else None
 
     context = {
         # RAG Retrieval
@@ -475,65 +533,85 @@ def evaluation(request):
     return render(request, 'quiz/evaluation.html', context)
 
 
+@cache_page(300)
+@vary_on_cookie
 def system_health(request):
     """
     System Health Dashboard.
     Operational metrics for pipeline health, provider performance, and error analysis.
+    Optimized to use database-level aggregation instead of Python loops.
     """
     # ─── System Operational Metrics ───────────────────────────────────────────
-    total_textbook_chunks = TextbookChunk.objects.count()
-    total_uploaded_chunks = UploadedChunk.objects.count()
-    total_chunks = total_textbook_chunks + total_uploaded_chunks
+    chunk_stats = TextbookChunk.objects.aggregate(
+        total=Count('id'),
+        with_embeddings=Count('id', filter=~Q(embedding=None) & ~Q(embedding=[]) & ~Q(embedding='')),
+        with_topic=Count('id', filter=Q(topic__isnull=False)),
+    )
+    total_textbook_chunks = chunk_stats['total']
+    textbook_chunks_with_embeddings = chunk_stats['with_embeddings']
+    topic_coverage = chunk_stats['with_topic']
 
-    textbook_chunks_with_embeddings = TextbookChunk.objects.exclude(embedding=None).exclude(embedding=[]).exclude(embedding='').count()
-    uploaded_chunks_with_embeddings = UploadedChunk.objects.exclude(embedding=None).exclude(embedding=[]).exclude(embedding='').count()
+    uploaded_stats = UploadedChunk.objects.aggregate(
+        total=Count('id'),
+        with_embeddings=Count('id', filter=~Q(embedding=None) & ~Q(embedding=[]) & ~Q(embedding='')),
+    )
+    total_uploaded_chunks = uploaded_stats['total']
+    uploaded_chunks_with_embeddings = uploaded_stats['with_embeddings']
+
+    total_chunks = total_textbook_chunks + total_uploaded_chunks
 
     embedding_coverage = 0
     if total_chunks > 0:
         embedding_coverage = ((textbook_chunks_with_embeddings + uploaded_chunks_with_embeddings) / total_chunks) * 100
 
-    avg_chunks_per_session = 0
     session_count = UploadSession.objects.count()
-    if session_count > 0:
-        avg_chunks_per_session = total_uploaded_chunks / session_count
+    avg_chunks_per_session = (total_uploaded_chunks / session_count) if session_count else 0
 
-    topic_coverage = TextbookChunk.objects.exclude(topic=None).count()
-    topic_coverage_pct = 0
-    if total_textbook_chunks > 0:
-        topic_coverage_pct = (topic_coverage / total_textbook_chunks) * 100
+    topic_coverage_pct = (topic_coverage / total_textbook_chunks * 100) if total_textbook_chunks else 0
 
     quizzes_pending = Quiz.objects.filter(status__in=[Quiz.STATUS_PENDING, Quiz.STATUS_PROCESSING]).count()
 
-    avg_processing_time = 0
-    sessions_with_timing = UploadSession.objects.filter(
+    avg_processing_time_result = UploadSession.objects.filter(
         processing_started_at__isnull=False,
         processing_completed_at__isnull=False,
-    )
-    if sessions_with_timing.exists():
-        total_seconds = sum(
-            (s.processing_completed_at - s.processing_started_at).total_seconds()
-            for s in sessions_with_timing.iterator(chunk_size=100)
-        )
-        avg_processing_time = total_seconds / sessions_with_timing.count()
+    ).annotate(
+        duration_seconds=Extract(F('processing_completed_at'), 'epoch') - Extract(F('processing_started_at'), 'epoch')
+    ).aggregate(avg=Avg('duration_seconds'))
+    avg_processing_time = avg_processing_time_result['avg'] or 0
 
     # ─── Pipeline Operational Metrics ─────────────────────────────────────────
-    total_quizzes = Quiz.objects.count()
-    quizzes_completed = Quiz.objects.filter(status=Quiz.STATUS_COMPLETED).count()
-    quizzes_failed = Quiz.objects.filter(status=Quiz.STATUS_FAILED).count()
+    quiz_stats = Quiz.objects.aggregate(
+        total=Count('id'),
+        completed=Count('id', filter=Q(status=Quiz.STATUS_COMPLETED)),
+        failed=Count('id', filter=Q(status=Quiz.STATUS_FAILED)),
+    )
+    total_quizzes = quiz_stats['total']
+    quizzes_completed = quiz_stats['completed']
+    quizzes_failed = quiz_stats['failed']
 
     quiz_terminal = quizzes_completed + quizzes_failed
     quiz_success_rate = (quizzes_completed / quiz_terminal * 100) if quiz_terminal > 0 else 0
 
-    total_sessions = UploadSession.objects.count()
-    sessions_completed = UploadSession.objects.filter(processing_status=UploadSession.STATUS_COMPLETED).count()
-    sessions_failed = UploadSession.objects.filter(processing_status=UploadSession.STATUS_FAILED).count()
+    session_stats = UploadSession.objects.aggregate(
+        total=Count('id'),
+        completed=Count('id', filter=Q(processing_status=UploadSession.STATUS_COMPLETED)),
+        failed=Count('id', filter=Q(processing_status=UploadSession.STATUS_FAILED)),
+    )
+    total_sessions = session_stats['total']
+    sessions_completed = session_stats['completed']
+    sessions_failed = session_stats['failed']
 
     session_terminal = sessions_completed + sessions_failed
     summary_success_rate = (sessions_completed / session_terminal * 100) if session_terminal > 0 else 0
 
-    total_attempts = QuizAttempt.objects.count()
-    recs_completed = QuizAttempt.objects.filter(recommendation_status=QuizAttempt.RECOMMENDATION_COMPLETED).count()
-    recs_failed = QuizAttempt.objects.filter(recommendation_status=QuizAttempt.RECOMMENDATION_FAILED).count()
+    attempt_stats = QuizAttempt.objects.aggregate(
+        total=Count('id'),
+        recs_completed=Count('id', filter=Q(recommendation_status=QuizAttempt.RECOMMENDATION_COMPLETED)),
+        recs_failed=Count('id', filter=Q(recommendation_status=QuizAttempt.RECOMMENDATION_FAILED)),
+    )
+    total_attempts = attempt_stats['total']
+    recs_completed = attempt_stats['recs_completed']
+    recs_failed = attempt_stats['recs_failed']
 
     rec_terminal = recs_completed + recs_failed
     rec_success_rate = (recs_completed / rec_terminal * 100) if rec_terminal > 0 else 0
@@ -550,8 +628,10 @@ def system_health(request):
         overall_pipeline_success_rate = sum(components) / len(components)
 
     # ─── Provider Operational Metrics ─────────────────────────────────────────
+    has_generation_metrics = GenerationMetric.objects.exists()
+
     provider_distribution = []
-    if GenerationMetric.objects.exists():
+    if has_generation_metrics:
         provider_data = (
             GenerationMetric.objects.exclude(provider='')
             .values('provider')
@@ -565,14 +645,21 @@ def system_health(request):
             })
 
     metric_stats = {}
-    if GenerationMetric.objects.exists():
-        for gtype, label in GenerationMetric.GENERATION_TYPE_CHOICES:
-            qs = GenerationMetric.objects.filter(generation_type=gtype)
+    if has_generation_metrics:
+        type_stats_qs = GenerationMetric.objects.values('generation_type').annotate(
+            total=Count('id'),
+            success_count=Count('id', filter=Q(success=True)),
+            avg_duration=Avg('duration_ms'),
+            cache_hit_count=Count('id', filter=Q(cache_hit=True)),
+        )
+        for row in type_stats_qs:
+            gtype = row['generation_type']
+            total = row['total']
             metric_stats[gtype] = {
-                'total': qs.count(),
-                'success_rate': (qs.filter(success=True).count() / qs.count() * 100) if qs.exists() else 0,
-                'avg_duration': qs.aggregate(avg=Avg('duration_ms'))['avg'] or 0,
-                'cache_hit_rate': (qs.filter(cache_hit=True).count() / qs.count() * 100) if qs.exists() else 0,
+                'total': total,
+                'success_rate': (row['success_count'] / total * 100) if total else 0,
+                'avg_duration': row['avg_duration'] or 0,
+                'cache_hit_rate': (row['cache_hit_count'] / total * 100) if total else 0,
             }
 
     # ─── Error Analysis ───────────────────────────────────────────────────────
@@ -620,7 +707,7 @@ def system_health(request):
         # Provider
         'provider_distribution': provider_distribution,
         'metric_stats': metric_stats,
-        'has_generation_metrics': GenerationMetric.objects.exists(),
+        'has_generation_metrics': has_generation_metrics,
 
         # Errors
         'quiz_errors': list(quiz_errors),
@@ -630,19 +717,24 @@ def system_health(request):
     return render(request, 'quiz/system_health.html', context)
 
 
+@cache_page(300)
+@vary_on_cookie
 def user_analytics(request):
     """
     User Analytics Dashboard.
     User performance metrics and question quality proxies.
+    Optimized to use database-level aggregation instead of Python loops.
     """
     # ─── User Performance ─────────────────────────────────────────────────────
-    avg_score = QuizAttempt.objects.aggregate(avg=Avg('score'))['avg'] or 0
-    avg_total = QuizAttempt.objects.aggregate(avg=Avg('total_questions'))['avg'] or 10
-    avg_score_pct = 0
-    if avg_total > 0:
-        avg_score_pct = (avg_score / avg_total) * 100
-
-    total_attempts = QuizAttempt.objects.count()
+    attempt_avgs = QuizAttempt.objects.aggregate(
+        avg_score=Avg('score'),
+        avg_total=Avg('total_questions'),
+        total=Count('id'),
+    )
+    avg_score = attempt_avgs['avg_score'] or 0
+    avg_total = attempt_avgs['avg_total'] or 10
+    avg_score_pct = (avg_score / avg_total * 100) if avg_total > 0 else 0
+    total_attempts = attempt_avgs['total']
 
     score_distribution = (
         QuizAttempt.objects.exclude(total_questions=0)
@@ -703,11 +795,15 @@ def user_analytics(request):
             'count': item['count'],
         })
 
-    avg_questions_per_quiz = 0
-    completed_quizzes = Quiz.objects.filter(status=Quiz.STATUS_COMPLETED).prefetch_related('questions')
-    if completed_quizzes.exists():
-        total_questions = sum(q.questions.count() for q in completed_quizzes)
-        avg_questions_per_quiz = total_questions / completed_quizzes.count()
+    quiz_question_stats = Quiz.objects.filter(
+        status=Quiz.STATUS_COMPLETED
+    ).aggregate(
+        total_quizzes=Count('id', distinct=True),
+        total_questions=Count('questions'),
+    )
+    total_completed = quiz_question_stats['total_quizzes']
+    total_questions_count = quiz_question_stats['total_questions']
+    avg_questions_per_quiz = (total_questions_count / total_completed) if total_completed else 0
 
     context = {
         'avg_score': round(avg_score, 2),

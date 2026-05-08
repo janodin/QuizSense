@@ -162,21 +162,9 @@ def retrieve_context_for_session(upload_session, mode='quiz', quiz_top_k=8, summ
         session_chunk_count = len(session_chunks)
 
         # ── Textbook chunks (topic-aware filtering, no expensive random sort) ──
-        # Extract topics from uploaded chunks to narrow the search space
-        upload_topics = list(
-            UploadedChunk.objects.filter(upload_session=upload_session)
-            .exclude(topic=None)
-            .values_list('topic_id', flat=True)
-            .distinct()
-        )
-
-        if upload_topics:
-            textbook_qs = TextbookChunk.objects.filter(
-                chapter=upload_session.chapter,
-                topic_id__in=upload_topics,
-            )
-        else:
-            textbook_qs = TextbookChunk.objects.filter(chapter=upload_session.chapter)
+        # Note: UploadedChunk does not have a topic field, so we filter textbook
+        # chunks by chapter only. Topic filtering applies to TextbookChunk directly.
+        textbook_qs = TextbookChunk.objects.filter(chapter=upload_session.chapter)
 
         # Deterministic ordering — much faster than order_by('?')
         textbook_records = list(

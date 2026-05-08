@@ -46,6 +46,11 @@ from .rag_service import retrieve_context_for_session
 
 logger = logging.getLogger(__name__)
 
+_SYSTEM_PROMPT = (
+    "You are an expert programming instructor creating educational content. "
+    "Follow all formatting instructions precisely. Return only the requested content."
+)
+
 
 class GenerationType(Enum):
     SUMMARY = "summary"
@@ -138,7 +143,7 @@ class GeminiProvider(AIProvider):
                 response = client.models.generate_content(
                     model="gemini-2.5-flash-lite",
                     contents=prompt,
-                    config={"max_output_tokens": max_tokens},
+                    config={"max_output_tokens": max_tokens, "system_instruction": _SYSTEM_PROMPT},
                 )
                 return response.text or ""
             finally:
@@ -266,6 +271,7 @@ class MiniMaxProvider(AIProvider):
         }
         payload = {
             "model": self._model,
+            "system": _SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
         }
@@ -626,13 +632,6 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
         chapter_id = upload_session.chapter_id or 0
         cache_key = _cache_key("summary", chapter_id, _get_content_hash(all_text))
 
-        # Retrieve context via RAG BEFORE cache check — ensures RetrievalLog is always created
-        _detail("Retrieving context via RAG...")
-        rag_result = retrieve_context_for_session(upload_session, mode='summary')
-        combined_text = rag_result['context_text'] or all_text[:12000]
-        cross_ref = rag_result['cross_reference_notes']
-        _detail(f"RAG context ready: {len(combined_text)} chars")
-
         cached_summary = cache.get(cache_key)
         if cached_summary:
             cache_hit = True
@@ -647,6 +646,13 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
                 was_fallback=False,
             )
         else:
+            # Cache miss — retrieve context via RAG before calling AI
+            _detail("Cache miss — retrieving context via RAG...")
+            rag_result = retrieve_context_for_session(upload_session, mode='summary')
+            combined_text = rag_result['context_text'] or all_text[:12000]
+            cross_ref = rag_result['cross_reference_notes']
+            _detail(f"RAG context ready: {len(combined_text)} chars")
+
             provider = get_generation_provider()
             total_len = len(all_text)
 

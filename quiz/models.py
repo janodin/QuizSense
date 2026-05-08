@@ -56,6 +56,12 @@ class UploadedFile(models.Model):
     summary = models.TextField(blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['upload_session']),
+            models.Index(fields=['upload_session', 'chapter']),
+        ]
+
     def __str__(self):
         return f"{self.file.name} ({self.file_type}) — {self.uploaded_at:%Y-%m-%d %H:%M}"
 
@@ -84,6 +90,13 @@ class Question(models.Model):
     def __str__(self):
         return f"Q: {self.text[:60]}..."
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['chapter']),
+            models.Index(fields=['topic']),
+            models.Index(fields=['chapter', 'topic']),
+        ]
+
 
 class Quiz(models.Model):
     STATUS_PENDING = 'pending'
@@ -108,6 +121,10 @@ class Quiz(models.Model):
 
     class Meta:
         verbose_name_plural = 'Quizzes'
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['status', 'created_at']),
+        ]
 
     def __str__(self):
         return f"Quiz for {self.chapter} — {self.created_at:%Y-%m-%d %H:%M}"
@@ -148,6 +165,11 @@ class QuizAttempt(models.Model):
             self.score = self.total_questions
         super().save(*args, **kwargs)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['recommendation_status']),
+        ]
+
 
 class QuizAnswer(models.Model):
     attempt = models.ForeignKey(QuizAttempt, on_delete=models.CASCADE, related_name='answers')
@@ -157,6 +179,9 @@ class QuizAnswer(models.Model):
 
     class Meta:
         unique_together = ['attempt', 'question']
+        indexes = [
+            models.Index(fields=['question', 'is_correct']),
+        ]
 
     def __str__(self):
         return f"Answer to Q{self.question.id} — {'Correct' if self.is_correct else 'Wrong'}"
@@ -185,6 +210,9 @@ class UploadSession(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['processing_status']),
+        ]
 
     def __str__(self):
         return f"Upload Session #{self.id} for {self.chapter}"
@@ -209,6 +237,8 @@ class TextbookChunk(models.Model):
         ordering = ['chapter__number', 'source_title', 'chunk_index']
         indexes = [
             models.Index(fields=['source_title', 'embedding_version', 'source_hash']),
+            models.Index(fields=['chapter']),
+            models.Index(fields=['chapter', 'topic']),
         ]
 
     def __str__(self):
@@ -226,6 +256,11 @@ class UploadedChunk(models.Model):
 
     class Meta:
         ordering = ['upload_session_id', 'uploaded_file_id', 'chunk_index']
+        indexes = [
+            models.Index(fields=['upload_session']),
+            models.Index(fields=['upload_session', 'chunk_index']),
+            models.Index(fields=['chapter']),
+        ]
 
     def __str__(self):
         return f"UploadedChunk session={self.upload_session_id} file={self.uploaded_file_id}#{self.chunk_index}"
@@ -265,6 +300,9 @@ class GenerationMetric(models.Model):
             models.Index(fields=['generation_type', 'created_at']),
             models.Index(fields=['provider', 'created_at']),
             models.Index(fields=['success', 'created_at']),
+            models.Index(fields=['was_fallback']),
+            models.Index(fields=['output_validated']),
+            models.Index(fields=['generation_type', 'output_length']),
         ]
 
     def __str__(self):
@@ -291,6 +329,8 @@ class RetrievalLog(models.Model):
             models.Index(fields=['upload_session', 'created_at']),
             models.Index(fields=['mode', 'created_at']),
             models.Index(fields=['created_at']),
+            models.Index(fields=['avg_similarity_top_k']),
+            models.Index(fields=['session_chunk_count', 'textbook_chunk_count']),
         ]
 
     def __str__(self):

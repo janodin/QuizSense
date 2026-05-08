@@ -48,6 +48,9 @@ urllib3==2.6.3
 websockets==16.0
 whitenoise==6.8.2
 
+celery==5.4.0
+redis==5.2.1
+
 # Memory monitoring (optional but recommended)
 psutil>=5.9.0
 

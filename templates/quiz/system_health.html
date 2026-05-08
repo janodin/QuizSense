@@ -101,14 +101,47 @@
   }
   .dashboard-nav {
     margin-bottom: 2rem;
+    background: #ffffff;
+    padding: 0.375rem;
+    border-radius: 0.75rem;
+    display: inline-flex;
+    gap: 0.25rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+    border: 1px solid #e5e7eb;
+  }
+  .dashboard-nav .nav-item {
+    position: relative;
   }
   .dashboard-nav .nav-link {
-    color: #495057;
+    color: #6b7280 !important;
     font-weight: 500;
+    font-size: 0.875rem;
+    padding: 0.5rem 1.125rem;
+    border-radius: 0.5rem;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    letter-spacing: 0.01em;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  .dashboard-nav .nav-link i {
+    font-size: 1rem;
+    opacity: 0.8;
+  }
+  .dashboard-nav .nav-link:hover {
+    background-color: #f3f4f6;
+    color: #111827 !important;
+  }
+  .dashboard-nav .nav-link:hover i {
+    opacity: 1;
   }
   .dashboard-nav .nav-link.active {
-    background-color: #198754;
-    color: #fff;
+    background-color: #059669;
+    color: #ffffff !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+  .dashboard-nav .nav-link.active i {
+    opacity: 1;
   }
 </style>
 {% endblock %}
@@ -149,7 +182,7 @@
   <div class="col-md-4">
     <div class="metric-card text-center">
       <div class="metric-label mb-2">Overall Pipeline Success Rate</div>
-      <div class="metric-value">{{ overall_system_accuracy }}%</div>
+      <div class="metric-value">{{ overall_pipeline_success_rate }}%</div>
       <small class="text-muted">Mean of pipeline completion rates</small>
     </div>
   </div>
