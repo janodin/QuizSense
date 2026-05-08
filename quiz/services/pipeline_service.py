@@ -363,7 +363,7 @@ class MiniMaxProvider(AIProvider):
             f"Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes or 'N/A'}\n\n"
             'Return ONLY a valid JSON array. Each object: {{"question", "choices":{{"A","B","C","D"}}, "correct_answer", "topic"}}'
         )
-        raw = self._make_request(prompt, max_tokens=4096, timeout=20)
+        raw = self._make_request(prompt, max_tokens=4096, timeout=45)
 
         cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
         start = cleaned.find("[")
@@ -401,7 +401,7 @@ class MiniMaxProvider(AIProvider):
             f"--- Incorrect Answers ---\n{wrong_summary}\n\n"
             f"Focus on the weak topics and explain what the student should study to improve."
         )
-        return self._make_request(prompt, timeout=20)
+        return self._make_request(prompt, timeout=45)
 
     def get_provider_name(self) -> str:
         return "minimax"
@@ -584,13 +584,17 @@ def _cache_key(prefix: str, chapter_id: Any, content_hash: str) -> str:
 def _validate_summary(data: Any) -> bool:
     if not isinstance(data, str):
         return False
-    return (
+    has_headers = (
         "## Study Summary" in data
         and "### Overview" in data
         and "### Key Concepts" in data
         and "### Review Focus" in data
-        and len(data) > 100
     )
+    # Check for meaningful content (not just headers)
+    has_content = len(data) > 200
+    # Check for bullet points or numbered lists (actual content)
+    has_lists = any(marker in data for marker in ['- ', '* ', '1. ', '• '])
+    return has_headers and has_content and has_lists
 
 
 def _process_summary_for_session(upload_session: UploadSession, timer=None) -> GenerationResult:
@@ -993,7 +997,17 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
         output_validated = False
         if result.success and result.generation_type == GenerationType.QUIZ:
             if isinstance(result.data, list) and len(result.data) > 0:
-                output_validated = True
+                # Validate each MCQ has required fields
+                valid_count = 0
+                for mcq in result.data[:10]:
+                    q_text = mcq.get('question', '')
+                    choices = mcq.get('choices') or {}
+                    has_valid_choices = all(isinstance(choices.get(k), str) and choices.get(k) for k in ['A', 'B', 'C', 'D'])
+                    has_valid_answer = mcq.get('correct_answer') in {'A', 'B', 'C', 'D'}
+                    has_topic = isinstance(mcq.get('topic', ''), str) and mcq.get('topic', '')
+                    if isinstance(q_text, str) and len(q_text) > 10 and has_valid_choices and has_valid_answer and has_topic:
+                        valid_count += 1
+                output_validated = valid_count >= 5  # At least 5 of 10 questions must be valid
             elif hasattr(result.data, 'questions') and result.data.questions.count() > 0:
                 output_validated = True
 

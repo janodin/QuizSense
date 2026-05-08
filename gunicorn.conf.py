@@ -22,7 +22,7 @@ max_requests = 100
 max_requests_jitter = 20
 
 # Hard timeout for long-running requests (e.g. large file uploads)
-timeout = 120
+timeout = 180
 keepalive = 5
 
 # Logging

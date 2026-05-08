@@ -79,7 +79,8 @@ function pollQuizStatus() {
             refreshBtn.innerHTML = 'Try Again';
             refreshBtn.className = 'btn btn-danger';
             refreshBtn.disabled = false;
-            refreshBtn.onclick = () => window.location.reload();
+            const generateUrl = "{% url 'generate_quiz' quiz.upload_session.id %}";
+            refreshBtn.onclick = () => window.location.href = generateUrl;
         } else {
             statusEl.className = 'alert alert-info';
             statusEl.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Still generating... Please wait.';

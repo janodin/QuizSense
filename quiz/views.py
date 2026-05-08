@@ -207,6 +207,9 @@ def generate_quiz(request, upload_session_id):
     if existing_quiz:
         return redirect('take_quiz', quiz_id=existing_quiz.id)
 
+    # Delete any failed quizzes for this session so a fresh one is created
+    Quiz.objects.filter(upload_session=upload_session, status=Quiz.STATUS_FAILED).delete()
+
     quiz = Quiz.objects.create(
         chapter=chapter,
         upload_session=upload_session,

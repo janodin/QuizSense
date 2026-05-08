@@ -161,13 +161,28 @@ def retrieve_context_for_session(upload_session, mode='quiz', quiz_top_k=8, summ
         session_chunks = [chunk for chunk, _ in session_chunks_scored[:session_k]]
         session_chunk_count = len(session_chunks)
 
-        # ── Textbook chunks (sample subset to avoid loading thousands) ───────
-        textbook_records = list(
-            TextbookChunk.objects.filter(
-                chapter=upload_session.chapter
+        # ── Textbook chunks (topic-aware filtering, no expensive random sort) ──
+        # Extract topics from uploaded chunks to narrow the search space
+        upload_topics = list(
+            UploadedChunk.objects.filter(upload_session=upload_session)
+            .exclude(topic=None)
+            .values_list('topic_id', flat=True)
+            .distinct()
+        )
+
+        if upload_topics:
+            textbook_qs = TextbookChunk.objects.filter(
+                chapter=upload_session.chapter,
+                topic_id__in=upload_topics,
             )
+        else:
+            textbook_qs = TextbookChunk.objects.filter(chapter=upload_session.chapter)
+
+        # Deterministic ordering — much faster than order_by('?')
+        textbook_records = list(
+            textbook_qs
             .only('id', 'content', 'embedding', 'topic')
-            .order_by('?')[:200]  # random sample for diversity
+            .order_by('id')[:500]
         )
         valid_textbook_chunks = [c for c in textbook_records if c.embedding]
         textbook_chunks_scored = _get_top_k_chunks(
