@@ -19,7 +19,7 @@ def process_upload_session_task(self, upload_session_id):
     Upload processing: extract text → chunk → embed → generate summary.
     Uses simplified sequential pipeline.
     """
-    from django.db import close_old_connections
+    from django.db import close_old_connections, connection
     from .services.pipeline_service import process_upload_session_simple
 
     close_old_connections()
@@ -31,6 +31,8 @@ def process_upload_session_task(self, upload_session_id):
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise
+    finally:
+        connection.close()
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30, time_limit=300, soft_time_limit=270)
@@ -39,7 +41,7 @@ def generate_quiz_task(self, upload_session_id):
     Generate quiz for an upload session after summary is ready.
     Uses RAG to retrieve context and generates 10 MCQs via AI.
     """
-    from django.db import close_old_connections
+    from django.db import close_old_connections, connection
     from .models import Quiz, UploadSession
     from .services.pipeline_service import _process_quiz_for_session
 
@@ -85,6 +87,8 @@ def generate_quiz_task(self, upload_session_id):
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise
+    finally:
+        connection.close()
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=120, time_limit=180, soft_time_limit=150)
@@ -92,7 +96,7 @@ def generate_recommendations_task(self, attempt_id):
     """
     Generate AI study recommendations for a completed quiz attempt.
     """
-    from django.db import close_old_connections
+    from django.db import close_old_connections, connection
     from .models import QuizAttempt
     from .services.pipeline_service import generate_recommendations_for_attempt
 
@@ -121,3 +125,5 @@ def generate_recommendations_task(self, attempt_id):
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise
+    finally:
+        connection.close()
