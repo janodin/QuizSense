@@ -207,26 +207,45 @@ class ModelProvider(AIProvider):
         import json
         import re
 
+        def _extract_json_array(raw_text: str) -> str:
+            cleaned_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL)
+            cleaned_text = re.sub(r'<reasoning>.*?</reasoning>', '', cleaned_text, flags=re.DOTALL)
+            cleaned_text = re.sub(r'```(?:json)?\s*', '', cleaned_text).strip().strip('`')
+            start = cleaned_text.find("[")
+            end = cleaned_text.rfind("]")
+            if start == -1 or end == -1:
+                raise ValueError(f"AI Response parsing failed. Raw starts with: {raw_text[:100]}")
+            return cleaned_text[start:end + 1]
+
+        def _parse_questions(raw_text: str) -> list:
+            return json.loads(_extract_json_array(raw_text))
+
         prompt = (
             "You are an expert programming instructor. Generate exactly 10 MCQs as a JSON array.\n\n"
             f"Chapter: {chapter_title}\n\n"
             f"Retrieved Context:\n{text[:6000]}\n\n"
             f"Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes or 'N/A'}\n\n"
-            'Return ONLY a valid JSON array. Each object: {"question", "choices":{"A","B","C","D"}, "correct_answer", "topic"}\n\n'
+            'Return ONLY a valid JSON array. Each object: {"question", "choices":{"A","B","C","D"}, "correct_answer", "topic"}\n'
+            'Escape quotes inside strings. Do not use markdown. Do not add comments.\n\n'
             'IMPORTANT: Do NOT include any reasoning, thinking, or explanation. Output ONLY the JSON array.'
         )
         raw = self._make_request(prompt, max_tokens=4096)
 
-        # Strip reasoning/thinking tags that gpt-oss outputs with high reasoning
-        cleaned = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
-        cleaned = re.sub(r'<reasoning>.*?</reasoning>', '', cleaned, flags=re.DOTALL)
-        cleaned = re.sub(r'```(?:json)?\s*', '', cleaned).strip().strip('`')
-        start = cleaned.find("[")
-        end = cleaned.rfind("]")
-        if start == -1 or end == -1:
-            raise ValueError(f"AI Response parsing failed. Raw starts with: {raw[:100]}")
-
-        questions = json.loads(cleaned[start:end + 1])
+        try:
+            questions = _parse_questions(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[AI_PROVIDER] Quiz JSON parse failed; attempting repair: %s",
+                exc,
+            )
+            repair_prompt = (
+                "Convert the malformed quiz JSON below into a valid JSON array.\n"
+                "Preserve the same questions, choices, correct_answer letters, and topics.\n"
+                "Return ONLY valid JSON. No markdown, no explanation.\n\n"
+                f"Malformed JSON:\n{_extract_json_array(raw)}"
+            )
+            repaired = self._make_request(repair_prompt, max_tokens=4096, timeout=90)
+            questions = _parse_questions(repaired)
         return questions[:10]
 
     def generate_recommendations(
