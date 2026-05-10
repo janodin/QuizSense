@@ -10,8 +10,6 @@ Handles text extraction from PDF and Word files using:
 import base64
 import io
 import logging
-import tempfile
-from pathlib import Path
 
 import docx
 import fitz  # PyMuPDF
@@ -93,43 +91,33 @@ def extract_text_from_docx(file_obj):
     Extract text from a Word (.docx) document using python-docx.
     """
     document = docx.Document(file_obj)
-    paragraphs = [para.text for para in document.paragraphs if para.text.strip()]
-    return "\n".join(paragraphs).strip()
+    text_parts = []
 
+    def _add_paragraphs(paragraphs):
+        for para in paragraphs:
+            text = para.text.strip()
+            if text:
+                text_parts.append(text)
 
-def extract_text_from_doc(file_obj):
-    """
-    Convert a legacy Word (.doc) file to a temporary PDF, extract text from it,
-    then delete the temporary conversion directory.
+    def _add_tables(tables):
+        for table in tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    text_parts.append(" | ".join(cells))
 
-    Uses Aspose.Words for Python, a pip-installable converter. No LibreOffice
-    or OS package installation is required.
-    """
-    try:
-        import aspose.words as aw
-    except ImportError:
-        logger.warning("Legacy .doc conversion skipped — aspose-words is not installed")
-        return ""
+    _add_paragraphs(document.paragraphs)
+    _add_tables(document.tables)
 
-    with tempfile.TemporaryDirectory(prefix="quizsense_doc_") as tmpdir:
-        tmp_path = Path(tmpdir)
-        doc_path = tmp_path / "upload.doc"
-        pdf_path = tmp_path / "upload.pdf"
+    for section in document.sections:
+        _add_paragraphs(section.header.paragraphs)
+        _add_tables(section.header.tables)
+        _add_paragraphs(section.footer.paragraphs)
+        _add_tables(section.footer.tables)
 
-        file_obj.seek(0)
-        with doc_path.open("wb") as output:
-            for chunk in getattr(file_obj, "chunks", lambda: [file_obj.read()])():
-                output.write(chunk)
-
-        try:
-            document = aw.Document(str(doc_path))
-            document.save(str(pdf_path))
-        except Exception as e:
-            logger.warning("Legacy .doc conversion failed: %s", e)
-            return ""
-
-        with pdf_path.open("rb") as pdf_file:
-            return extract_text_from_pdf(pdf_file)
+    extracted = "\n".join(text_parts).strip()
+    logger.info("DOCX extracted %d chars", len(extracted))
+    return extracted
 
 
 def _parse_pdf_pymupdf(file_obj):
