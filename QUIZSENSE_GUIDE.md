@@ -30,7 +30,7 @@
 ### What It Does
 
 1. **Upload** — Students or teachers upload PDF/DOCX lecture files
-2. **Extract** — The system extracts text from the files (with OCR for scanned PDFs)
+2. **Extract** — The system extracts text from the files (with AI Vision OCR for scanned PDFs up to 100 pages and image-only DOCX files)
 3. **Summarize** — AI generates a study summary of the uploaded content
 4. **Quiz** — AI creates a 10-question multiple-choice quiz grounded in textbook knowledge
 5. **Recommend** — After the quiz, AI provides personalized topic recommendations for improvement
@@ -105,11 +105,11 @@ The system is designed for **Fundamentals of Programming** with these chapters:
 | **Task Queue** | Celery 5.4.0 | Background task processing |
 | **Cache & Broker** | Redis 5.2.1 | Caching, task brokering, embedding cache |
 | **Database** | PostgreSQL | Primary data storage |
-| **Embeddings** | sentence-transformers (all-MiniLM-L6-v2) | Text-to-vector conversion (384 dimensions) |
+| **Embeddings** | DeepInfra API (sentence-transformers/all-MiniLM-L6-v2) | Text-to-vector conversion via API (384 dimensions) |
 | **AI Language Model** | DeepInfra openai/gpt-oss-120B | Summary, quiz, and recommendation generation |
 | **PDF Processing** | PyMuPDF (fitz) | Text extraction from PDFs |
 | **Word Processing** | python-docx | Text extraction from DOCX files |
-| **OCR** | DeepInfra Vision API (Llama-3.2-90B-Vision) | Cloud-based OCR for scanned PDFs |
+| **OCR** | DeepInfra Vision API (Llama-3.2-90B-Vision) | Cloud-based OCR for scanned PDFs (up to 100 pages) and image-only DOCX files |
 | **Web Server** | Gunicorn + Nginx | Production deployment |
 | **Frontend** | Bootstrap 5.3.3, Chart.js, DOMPurify | UI, data visualization, and XSS protection |
 | **Security** | GZipMiddleware, Rate Limiting, System Prompts | Compression, abuse prevention, token optimization |
@@ -225,29 +225,33 @@ process_upload_session(session_id)
     │
     ├── Step 1: TEXT_EXTRACTION
     │   ├── For each uploaded file:
-    │   │   ├── PDF → PyMuPDF extracts text
-    │   │   ├── DOCX → python-docx extracts text
-    │   │   └── Scanned PDF → DeepInfra Vision OCR (max 10 pages)
+    │   │   ├── PDF → PyMuPDF extracts text page-by-page
+    │   │   │   └── If page has <50 chars → AI Vision OCR fallback for that page
+    │   │   ├── DOCX → python-docx extracts text (paragraphs, tables, headers/footers, raw XML)
+    │   │   │   └── If no text found → AI Vision OCR on embedded word/media/ images
+    │   │   └── Scanned PDF → DeepInfra Vision OCR (max 100 pages)
     │   └── Save extracted_text to UploadedFile records
     │
     ├── Step 2: CHUNKING_EMBEDDING
     │   ├── Split all extracted text into 500-word chunks (100-word overlap)
-    │   ├── Generate embeddings using sentence-transformers (batched)
-    │   ├── Bulk create UploadedChunk records with embeddings
-    │   └── Cache embeddings in Redis for performance
+    │   ├── Generate embeddings using DeepInfra API (sentence-transformers/all-MiniLM-L6-v2)
+    │   └── Bulk create UploadedChunk records with embeddings
     │
     └── Step 3: SUMMARY_GENERATION
         ├── Check Redis cache FIRST (cache key based on content hash)
         │   └── If cache hit: return cached summary (skip RAG)
         │
         ├── If cache miss:
-        │   ├── Build query from first 6 uploaded chunks
-        │   ├── Embed query text
-        │   ├── Retrieve top-k relevant chunks (cosine similarity)
-        │   │   ├── From uploaded chunks
-        │   │   └── From pre-seeded textbook chunks
-        │   ├── Send context + prompt to AI provider
+        │   ├── For long documents (>15k chars): Skip RAG, use map-reduce summary
+        │   ├── For short documents:
+        │   │   ├── Build query from first 6 uploaded chunks
+        │   │   ├── Embed query text via API
+        │   │   ├── Retrieve top-k relevant chunks (cosine similarity)
+        │   │   │   ├── From uploaded chunks
+        │   │   │   └── From pre-seeded textbook chunks
+        │   │   └── Send context + prompt to AI provider
         │   ├── Receive and validate HTML summary
+        │   ├── If reduce synthesis fails → retry with fallback strategy
         │   ├── Cache result in Redis
         │   └── Save summary to UploadSession
 ```
@@ -260,7 +264,7 @@ generate_quiz(session_id)
     ├── Create Quiz record (status: pending)
     │
     ├── Retrieve context via RAG:
-    │   ├── Embed uploaded content
+    │   ├── Embed uploaded content via DeepInfra API
     │   ├── Score against uploaded chunks (cosine similarity)
     │   ├── Score against textbook chunks (cosine similarity)
     │   └── Return top-k chunks from each source
@@ -270,7 +274,8 @@ generate_quiz(session_id)
     │
     ├── Validate JSON output:
     │   ├── Must have: question, choices (a-d), correct_answer, topic
-    │   └── Must have exactly 10 questions
+    │   ├── Must have exactly 10 questions
+    │   └── If malformed → JSON repair fallback attempts to fix
     │
     ├── Bulk create Question records
     ├── Link questions to Quiz (M2M relationship)
@@ -365,25 +370,32 @@ QuizSense implements a cache-first approach for RAG retrieval:
 3. **Cache Hit**: Returns cached summary in milliseconds, skipping RAG entirely
 4. **Cache Miss**: Only then performs embedding generation, similarity scoring, and AI generation
 5. **Cache TTL**: 7 days for summary cache, automatic invalidation on content changes
+6. **Skip RAG for Long Docs**: Documents >15k chars use map-reduce summary without RAG — embedding API call is skipped since map-reduce ignores retrieved context anyway
 
-This optimization saves 200-500ms per request on cache hits and significantly reduces database and AI API load.
+This optimization saves 200-500ms per request on cache hits and significantly reduces database and AI API load. For long documents, it saves the entire embedding API call (~2-5s).
 
 ### Embedding Process
 
-1. **Text → Vector**: Each chunk of text is converted into a 384-dimensional vector using `all-MiniLM-L6-v2`
+1. **Text → Vector**: Each chunk of text is sent to DeepInfra API which returns a 384-dimensional vector using `sentence-transformers/all-MiniLM-L6-v2`
 2. **Similarity Matching**: Cosine similarity measures how close two vectors are (0 = unrelated, 1 = identical)
 3. **Retrieval**: Top-k most similar chunks are selected as context for the AI
+4. **No Local Model**: Embeddings are API-generated — no PyTorch or sentence-transformers installed locally, saving ~500MB RAM per worker
 
 ### Performance Optimizations
 
+- **API-Based Embeddings**: No local PyTorch model — saves ~500MB RAM per worker
 - **Cache-First RAG**: Cache check runs BEFORE retrieval — saves 200-500ms on cache hits
+- **Skip RAG for Long Docs**: Documents >15k chars use map-reduce summary without embedding — saves API call time
 - **Redis Cache**: Embeddings are cached in Redis (178,000x speedup vs. recomputing)
-- **Int8 Quantization**: Embedding model uses 8-bit quantization to reduce memory
-- **Batched Encoding**: Multiple texts encoded together for efficiency
 - **Lazy Loading**: Model loads only when needed, evicts after 120s idle
+- **Batched Encoding**: Multiple texts encoded together for efficiency
 - **Database Indexes**: 20+ indexes on frequently queried fields for faster retrieval
 - **Aggregated Queries**: Database-level aggregation instead of Python loops for analytics
 - **Topic-Aware Filtering**: Textbook chunks filtered by chapter/topic before scoring
+- **JSON Repair Fallback**: Malformed AI quiz responses are auto-repaired instead of failing
+- **Retry/Fallback Summaries**: If reduce synthesis fails, retry with alternative strategy
+- **DB Connection Management**: `close_old_connections()` before saves; Celery tasks close connections in `finally` blocks
+- **Raised Token Limits**: `max_tokens=8192` default removes artificial output caps for natural-length summaries
 
 ---
 
@@ -441,16 +453,20 @@ QuizSense uses **session-based ownership** (no login required):
 ### File Processing
 - Multi-file upload (PDF and DOCX)
 - 10MB per file limit (max 10 files)
-- PyMuPDF for direct PDF text extraction
-- python-docx for Word document extraction
-- DeepInfra Vision OCR for scanned PDFs (capped at 10 pages)
+- PyMuPDF for direct PDF text extraction (page-by-page with OCR fallback)
+- python-docx for Word document extraction (paragraphs, tables, headers/footers, raw XML)
+- DeepInfra Vision OCR for scanned PDFs (up to 100 pages)
+- DOCX image OCR: extracts embedded `word/media/` images when no text found
+- Per-page text threshold: pages with <50 chars trigger OCR fallback
 
 ### AI Generation
-- Study summary from uploaded content
-- 10-question multiple-choice quiz
+- Study summary from uploaded content (map-reduce for long docs, RAG for short docs)
+- 10-question multiple-choice quiz with JSON repair fallback
 - Personalized topic recommendations after quiz
 - Powered by DeepInfra openai/gpt-oss-120B
 - System prompts for better instruction adherence and token optimization
+- `max_tokens=8192` for natural-length outputs
+- No hardcoded word count limits — summaries scale with content
 
 ### Quiz System
 - Interactive quiz UI with progress indicator
@@ -465,12 +481,15 @@ QuizSense uses **session-based ownership** (no login required):
 - Rate-limited polling endpoints (1 req/2s) — prevents abuse
 - GZip compression — 60-80% bandwidth reduction
 - RAG cache-first architecture — saves 200-500ms on cache hits
+- Skip RAG for long documents (>15k chars) — saves embedding API call
 - Optimized database queries (`.only()`, `.select_related()`)
 - Redis caching for embeddings and AI responses
-- Celery background task processing
-- Batched embedding generation
+- Celery background task processing with DB connection cleanup
+- API-based embedding generation (no local PyTorch — saves ~500MB RAM)
 - Cosine similarity retrieval from both uploaded and textbook chunks
 - Database indexes on frequently queried fields
+- JSON repair fallback for malformed AI responses
+- Retry/fallback strategy for summary generation failures
 
 ### Security
 - DOMPurify sanitization for AI-generated HTML (XSS protection)
@@ -530,11 +549,9 @@ celery -A quizsense worker --loglevel=info --pool=threads --concurrency=2 --max-
 |---------|---------|
 | `seed_chapters_topics` | Seeds 5 chapters with 38 topics |
 | `ingest_all_textbooks` | Ingests textbooks from dataset/ folder |
-| `precompute_textbook_embeddings` | Pre-computes textbook chunk embeddings |
-| `prewarm_embeddings` | Loads embedding model into memory |
+| `precompute_textbook_embeddings` | Pre-computes textbook chunk embeddings via API |
 | `evaluate_rag` | Evaluates RAG retrieval quality |
 | `cleanup_metrics` | Cleans up old GenerationMetric records |
-| `benchmark_embeddings` | Benchmarks embedding performance |
 
 ---
 
@@ -624,7 +641,18 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 - **Minimum**: 2 vCPU, 4GB RAM (Hetzner CX22)
 - **OS**: Ubuntu 22.04 LTS
-- **System Packages**: PostgreSQL, Redis, libgl1, nginx, certbot
+- **System Packages**: PostgreSQL, Redis, nginx, certbot
+- **No GPU Required**: All AI processing is API-based (DeepInfra)
+
+### Quick Deploy Command
+
+```bash
+# Pull latest code and restart services (single-line)
+ssh root@178.104.226.86 "cd /opt/quizsense && git pull && systemctl restart quizsense && systemctl restart celery"
+
+# Copy .env file to server (backs up existing first)
+scp root@178.104.226.86:/opt/quizsense/.env /tmp/.env.backup && scp .env root@178.104.226.86:/opt/quizsense/.env
+```
 
 ### Production Optimizations
 
@@ -636,6 +664,11 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 - **RAG Cache-First**: Cache check before expensive retrieval operations
 - **System Prompts**: Token cost reduction via prompt caching
 - **DOMPurify**: Client-side XSS protection for AI-generated content
+- **API-Based Embeddings**: No local PyTorch model — saves ~500MB RAM per worker
+- **DB Connection Cleanup**: `close_old_connections()` before saves; Celery tasks close connections in `finally` blocks
+- **JSON Repair Fallback**: Malformed AI quiz responses auto-repaired
+- **Retry/Fallback Summaries**: Alternative strategy when reduce synthesis fails
+- **Raised Token Limits**: `max_tokens=8192` for natural-length outputs
 
 ---
 
@@ -647,15 +680,30 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 ### Q: What AI model does the system use?
 
-**A:** The system uses DeepInfra's openai/gpt-oss-120B model. This is a 120-billion parameter open-weight model designed for powerful reasoning and complex tasks.
+**A:** The system uses DeepInfra's API for all AI operations:
+- **Text Generation**: openai/gpt-oss-120B (120B parameter model) for summaries, quizzes, and recommendations
+- **Vision OCR**: Llama-3.2-90B-Vision-Instruct for scanned PDF and image-only DOCX processing
+- **Embeddings**: sentence-transformers/all-MiniLM-L6-v2 via API for text-to-vector conversion
+
+All processing is cloud-based — no local GPU or heavy model dependencies required.
 
 ### Q: How does the system handle scanned PDFs?
 
-**A:** The system first attempts direct text extraction using PyMuPDF, then PyPDF2 as a fallback. If the PDF is scanned (no extractable text), it uses DeepInfra's Vision API (Llama-3.2-90B-Vision) for cloud-based OCR. The OCR process is capped at 10 pages to prevent excessive processing time and memory usage. No local OCR installation is required.
+**A:** The system first attempts direct text extraction using PyMuPDF page-by-page. If a page has fewer than 50 characters, it triggers AI Vision OCR fallback for just that page. For fully scanned PDFs, it uses DeepInfra's Vision API (Llama-3.2-90B-Vision) for cloud-based OCR. The OCR process supports up to 100 pages. No local OCR installation is required.
+
+### Q: How does the system handle image-only Word documents?
+
+**A:** When a DOCX file contains no extractable text (e.g., scanned pages pasted as images), the system:
+1. First extracts all available text from paragraphs, tables, headers/footers, and raw XML
+2. If no text is found, it extracts embedded images from the `word/media/` folder inside the DOCX
+3. Each image is sent to DeepInfra's Vision API for OCR
+4. The extracted text is then processed normally through the pipeline
+
+This ensures that even DOCX files with zero Word text nodes but hundreds of embedded images can be processed.
 
 ### Q: How are embeddings stored and searched?
 
-**A:** Embeddings are stored as JSON arrays in PostgreSQL TextField. For retrieval, the system loads embeddings into memory and computes cosine similarity using NumPy. This approach avoids the need for specialized vector databases while maintaining good performance through Redis caching and batched processing.
+**A:** Embeddings are generated via the DeepInfra API using sentence-transformers/all-MiniLM-L6-v2 (384 dimensions) and stored as JSON arrays in PostgreSQL TextField. For retrieval, the system loads embeddings into memory and computes cosine similarity using NumPy. This approach avoids the need for specialized vector databases while maintaining good performance through Redis caching. Since embeddings are API-generated, no local PyTorch model is needed — saving ~500MB RAM per worker.
 
 ### Q: How does the system know which user owns which quiz?
 
@@ -677,14 +725,15 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 **A:** Several optimizations are in place:
 
-- Embedding model uses int8 quantization (reduces memory by ~75%)
-- Model is lazy-loaded and evicted after 120 seconds of idle time
-- Textbook chunk scoring is done in paged batches to bound memory
-- Gunicorn recycles workers after a set number of requests
-- Celery workers have per-child memory limits (`--max-tasks-per-child=10`)
-- Redis caching avoids recomputing expensive operations
-- Database indexes reduce query memory footprint
-- `.only()` queries fetch only required fields
+- **API-Based Embeddings**: No local PyTorch or sentence-transformers — saves ~500MB RAM per worker
+- **Skip RAG for Long Docs**: Documents >15k chars use map-reduce summary without embedding — saves memory and API time
+- **Textbook chunk scoring**: Done in paged batches to bound memory
+- **Gunicorn recycles workers**: After a set number of requests
+- **Celery workers**: Have per-child memory limits (`--max-tasks-per-child=10`)
+- **Redis caching**: Avoids recomputing expensive operations
+- **Database indexes**: Reduce query memory footprint
+- **`.only()` queries**: Fetch only required fields
+- **DB connection cleanup**: `close_old_connections()` before saves; Celery tasks close connections in `finally` blocks
 
 ### Q: What datasets were used?
 
@@ -701,6 +750,9 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 - **System Prompts**: AI provider uses cached system prompts for token cost reduction
 - **DOMPurify**: Client-side sanitization prevents XSS from AI-generated content
 - **Database Indexes**: 20+ indexes optimize query performance and reduce load
+- **JSON Repair Fallback**: Malformed AI quiz responses are auto-repaired instead of failing
+- **Retry/Fallback Summaries**: Alternative strategy when reduce synthesis fails
+- **DB Connection Management**: Prevents "server closed connection" errors with proper cleanup
 
 ### Q: What security measures are in place?
 
