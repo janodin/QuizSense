@@ -70,6 +70,8 @@ def home(request):
                     filename = file_obj.name.lower()
                     if filename.endswith('.pdf'):
                         file_type = 'pdf'
+                    elif filename.endswith('.doc'):
+                        file_type = 'doc'
                     elif filename.endswith('.docx'):
                         file_type = 'docx'
                     else:
@@ -84,7 +86,7 @@ def home(request):
 
                 if not upload_session.files.exists():
                     upload_session.delete()
-                    messages.error(request, "Please upload at least one supported PDF or DOCX file.")
+                    messages.error(request, "Please upload at least one supported PDF or Word file.")
                     return render(request, 'quiz/home.html', {'form': form})
 
                 queue_upload_session_processing(upload_session.id)

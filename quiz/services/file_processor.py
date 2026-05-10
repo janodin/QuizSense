@@ -10,6 +10,10 @@ Handles text extraction from PDF and Word files using:
 import base64
 import io
 import logging
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 import docx
 import fitz  # PyMuPDF
@@ -93,6 +97,65 @@ def extract_text_from_docx(file_obj):
     document = docx.Document(file_obj)
     paragraphs = [para.text for para in document.paragraphs if para.text.strip()]
     return "\n".join(paragraphs).strip()
+
+
+def extract_text_from_doc(file_obj):
+    """
+    Convert a legacy Word (.doc) file to a temporary PDF, extract text from it,
+    then delete the temporary conversion directory.
+
+    Requires LibreOffice/soffice to be installed on the machine running Celery.
+    """
+    from django.conf import settings
+
+    configured_converter = getattr(settings, "LIBREOFFICE_PATH", "")
+    converter = configured_converter or shutil.which("soffice") or shutil.which("libreoffice")
+    if not converter:
+        logger.warning("Legacy .doc conversion skipped — LibreOffice/soffice not found")
+        return ""
+
+    with tempfile.TemporaryDirectory(prefix="quizsense_doc_") as tmpdir:
+        tmp_path = Path(tmpdir)
+        doc_path = tmp_path / "upload.doc"
+
+        file_obj.seek(0)
+        with doc_path.open("wb") as output:
+            for chunk in getattr(file_obj, "chunks", lambda: [file_obj.read()])():
+                output.write(chunk)
+
+        try:
+            subprocess.run(
+                [
+                    converter,
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(tmp_path),
+                    str(doc_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("Legacy .doc conversion timed out")
+            return ""
+        except subprocess.CalledProcessError as e:
+            logger.warning("Legacy .doc conversion failed: %s", e.stderr.decode(errors="ignore")[:500])
+            return ""
+
+        pdf_path = doc_path.with_suffix(".pdf")
+        if not pdf_path.exists():
+            generated_pdfs = list(tmp_path.glob("*.pdf"))
+            if not generated_pdfs:
+                logger.warning("Legacy .doc conversion produced no PDF")
+                return ""
+            pdf_path = generated_pdfs[0]
+
+        with pdf_path.open("rb") as pdf_file:
+            return extract_text_from_pdf(pdf_file)
 
 
 def _parse_pdf_pymupdf(file_obj):

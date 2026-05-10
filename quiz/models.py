@@ -46,6 +46,7 @@ class Topic(models.Model):
 class UploadedFile(models.Model):
     FILE_TYPE_CHOICES = [
         ('pdf', 'PDF'),
+        ('doc', 'Legacy Word Document'),
         ('docx', 'Word Document'),
     ]
     upload_session = models.ForeignKey('UploadSession', on_delete=models.CASCADE, related_name='files', null=True, blank=True)

@@ -27,7 +27,7 @@ class MultiFileUploadForm(forms.Form):
     files = MultipleFileField(
         widget=MultipleFileInput(attrs={
             'class': 'form-control form-control-lg',
-            'accept': '.pdf,.docx',
+            'accept': '.pdf,.doc,.docx',
             'multiple': True,
         }),
         label='Upload PDF or Word Files',
@@ -40,16 +40,19 @@ class MultiFileUploadForm(forms.Form):
     def clean_files(self):
         files = self.files.getlist('files')
         if not files:
-            raise forms.ValidationError('Please upload at least one PDF or DOCX file.')
+            raise forms.ValidationError('Please upload at least one PDF or Word file.')
 
         allowed_types = [
             'application/pdf',
+            'application/msword',
+            'application/x-msword',
+            'application/octet-stream',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         ]
         for file in files:
             name = file.name.lower()
-            if not (name.endswith('.pdf') or name.endswith('.docx')):
-                raise forms.ValidationError('Only PDF (.pdf) and Word (.docx) files are supported.')
+            if not (name.endswith('.pdf') or name.endswith('.doc') or name.endswith('.docx')):
+                raise forms.ValidationError('Only PDF (.pdf) and Word (.doc/.docx) files are supported.')
             if file.content_type not in allowed_types:
                 raise forms.ValidationError(f"File type {file.content_type} is not supported.")
             if file.size > 20 * 1024 * 1024:
