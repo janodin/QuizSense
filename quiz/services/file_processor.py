@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 PAGE_TEXT_MIN_CHARS = 50
 AI_VISION_OCR_MAX_PAGES = 20
+AI_VISION_OCR_MODEL = "Qwen/Qwen3-VL-30B-A3B-Instruct"
 AI_VISION_OCR_RENDER_SCALE = 3
 AI_VISION_OCR_RETRY_RENDER_SCALE = 4
 AI_VISION_OCR_RETRY_MIN_CHARS = 80
@@ -154,17 +155,18 @@ def _ocr_pdf_page_ai_vision(page, page_number):
             return ""
 
         url = "https://api.deepinfra.com/v1/openai/chat/completions"
-        model = "meta-llama/Llama-3.2-90B-Vision-Instruct"
+        model = getattr(settings, "AI_VISION_OCR_MODEL", AI_VISION_OCR_MODEL)
 
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         prompt = (
-            "You are a precise OCR engine. Transcribe every visible word from this page. "
+            "You are a precise document OCR engine. Transcribe every visible word from this page. "
             "Preserve line breaks where possible. Do not summarize. Do not explain. "
-            "If the page contains diagrams or code, include all visible labels and code text. "
-            "Return only the extracted text. If only a few words are visible, return those words."
+            "Read small text, slide bullets, headings, labels, tables, code, and diagram text. "
+            "Do not infer missing text. Do not describe images. Return only the extracted text. "
+            "If only a few words are visible, return those words."
         )
 
         def _request_ocr(scale):
