@@ -242,13 +242,10 @@ process_upload_session(session_id)
         │   └── If cache hit: return cached summary (skip RAG)
         │
         ├── If cache miss:
-        │   ├── For long documents (>15k chars): Skip RAG, use map-reduce summary
+        │   ├── Always retrieve RAG context (textbook + uploaded chunks)
+        │   ├── For long documents (>15k chars): Use map-reduce summary with RAG context
         │   ├── For short documents:
-        │   │   ├── Build query from first 6 uploaded chunks
-        │   │   ├── Embed query text via API
-        │   │   ├── Retrieve top-k relevant chunks (cosine similarity)
-        │   │   │   ├── From uploaded chunks
-        │   │   │   └── From pre-seeded textbook chunks
+        │   │   ├── Use RAG context directly for single-pass summary
         │   │   └── Send context + prompt to AI provider
         │   ├── Receive and validate HTML summary
         │   ├── If reduce synthesis fails → retry with fallback strategy
@@ -370,9 +367,9 @@ QuizSense implements a cache-first approach for RAG retrieval:
 3. **Cache Hit**: Returns cached summary in milliseconds, skipping RAG entirely
 4. **Cache Miss**: Only then performs embedding generation, similarity scoring, and AI generation
 5. **Cache TTL**: 7 days for summary cache, automatic invalidation on content changes
-6. **Skip RAG for Long Docs**: Documents >15k chars use map-reduce summary without RAG — embedding API call is skipped since map-reduce ignores retrieved context anyway
+6. **Map-Reduce for Long Docs**: Documents >15k chars use map-reduce summary with RAG context — embedding API call is still made to retrieve textbook knowledge
 
-This optimization saves 200-500ms per request on cache hits and significantly reduces database and AI API load. For long documents, it saves the entire embedding API call (~2-5s).
+This optimization saves 200-500ms per request on cache hits and significantly reduces database and AI API load. RAG context is always included to ground summaries in textbook knowledge.
 
 ### Embedding Process
 
@@ -385,7 +382,7 @@ This optimization saves 200-500ms per request on cache hits and significantly re
 
 - **API-Based Embeddings**: No local PyTorch model — saves ~500MB RAM per worker
 - **Cache-First RAG**: Cache check runs BEFORE retrieval — saves 200-500ms on cache hits
-- **Skip RAG for Long Docs**: Documents >15k chars use map-reduce summary without embedding — saves API call time
+- **Always-On RAG**: RAG retrieval runs for all documents — long docs use map-reduce with RAG context, short docs use single-pass with RAG context
 - **Redis Cache**: Embeddings are cached in Redis (178,000x speedup vs. recomputing)
 - **Lazy Loading**: Model loads only when needed, evicts after 120s idle
 - **Batched Encoding**: Multiple texts encoded together for efficiency
@@ -661,7 +658,7 @@ scp root@178.104.226.86:/opt/quizsense/.env /tmp/.env.backup && scp .env root@17
 - **Rate Limiting**: Polling endpoints limited to prevent abuse
 - **Database Indexes**: 20+ indexes on frequently queried fields
 - **Query Optimization**: `.only()`, `.select_related()`, and aggregated queries
-- **RAG Cache-First**: Cache check before expensive retrieval operations
+- **RAG Always-On**: RAG retrieval runs for all documents, grounding summaries in textbook knowledge
 - **System Prompts**: Token cost reduction via prompt caching
 - **DOMPurify**: Client-side XSS protection for AI-generated content
 - **API-Based Embeddings**: No local PyTorch model — saves ~500MB RAM per worker
@@ -726,7 +723,7 @@ This ensures that even DOCX files with zero Word text nodes but hundreds of embe
 **A:** Several optimizations are in place:
 
 - **API-Based Embeddings**: No local PyTorch or sentence-transformers — saves ~500MB RAM per worker
-- **Skip RAG for Long Docs**: Documents >15k chars use map-reduce summary without embedding — saves memory and API time
+- **Map-Reduce for Long Docs**: Documents >15k chars split into sections for parallel concept extraction, then synthesized with RAG context
 - **Textbook chunk scoring**: Done in paged batches to bound memory
 - **Gunicorn recycles workers**: After a set number of requests
 - **Celery workers**: Have per-child memory limits (`--max-tasks-per-child=10`)
