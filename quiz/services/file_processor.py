@@ -249,7 +249,11 @@ def _ocr_pdf_page_ai_vision(page, page_number):
 
 
 def _ocr_image_bytes_ai_vision(image_bytes, label):
-    """Send image bytes to AI Vision OCR and return extracted text."""
+    """Send image bytes to AI Vision OCR and return extracted text.
+
+    Primary model: Qwen2.5-VL-72B-Instruct (best OCR quality)
+    Fallback model: Llama-3.2-90B-Vision-Instruct (retry on failure)
+    """
     try:
         import json
         import requests
@@ -260,51 +264,86 @@ def _ocr_image_bytes_ai_vision(image_bytes, label):
             logger.warning("AI Vision OCR skipped for %s — AI_PROVIDER_API_KEY not set", label)
             return ""
 
-        url = "https://api.deepinfra.com/v1/openai/chat/completions"
-        model = "meta-llama/Llama-3.2-90B-Vision-Instruct"
         img_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Extract all text from this image. Return only the extracted text with no additional commentary.",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{img_b64}"
-                            },
-                        },
-                    ],
-                }
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.0,
-        }
+        OCR_PROMPT = (
+            "You are an expert OCR system. Extract ALL text from this image with high accuracy.\n"
+            "Rules:\n"
+            "- Preserve the original text structure, headings, and paragraphs.\n"
+            "- For tables, represent them clearly with rows and columns.\n"
+            "- For code or formulas, preserve all syntax and special characters exactly.\n"
+            "- If text is blurry or unclear, use context to infer the most likely characters.\n"
+            "- Do NOT add any commentary, explanations, or introductory text.\n"
+            "- Return ONLY the extracted text."
+        )
 
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        if response.status_code != 200:
-            logger.warning("[AI_VISION_OCR] HTTP %d on %s: %s", response.status_code, label, response.text[:500])
-            return ""
+        models = [
+            "Qwen/Qwen2.5-VL-72B-Instruct",
+            "meta-llama/Llama-3.2-90B-Vision-Instruct",
+        ]
 
-        data = response.json()
-        if "choices" not in data:
-            logger.warning("[AI_VISION_OCR] Unexpected response on %s: %s", label, json.dumps(data)[:500])
-            return ""
+        for model in models:
+            try:
+                text = _call_vision_model(model, api_key, img_b64, OCR_PROMPT, label)
+                if text:
+                    return text
+            except Exception as e:
+                logger.warning("[AI_VISION_OCR] Model %s failed on %s: %s", model, label, e)
+                continue
 
-        text = data["choices"][0]["message"]["content"].strip()
-        if text:
-            logger.info("[AI_VISION_OCR] %s extracted (%d chars)", label, len(text))
-        return text
+        logger.warning("[AI_VISION_OCR] All vision models failed on %s", label)
+        return ""
+
     except Exception as e:
         logger.warning("AI Vision OCR failed on %s: %s", label, e)
     return ""
+
+
+def _call_vision_model(model, api_key, img_b64, prompt, label):
+    """Call a single vision model and return extracted text."""
+    import json
+    import requests
+
+    url = "https://api.deepinfra.com/v1/openai/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{img_b64}"
+                        },
+                    },
+                ],
+            }
+        ],
+        "max_tokens": 4096,
+        "temperature": 0.0,
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
+    if response.status_code != 200:
+        logger.warning("[AI_VISION_OCR] HTTP %d on %s (%s): %s", response.status_code, model, label, response.text[:500])
+        return ""
+
+    data = response.json()
+    if "choices" not in data:
+        logger.warning("[AI_VISION_OCR] Unexpected response on %s (%s): %s", model, label, json.dumps(data)[:500])
+        return ""
+
+    text = data["choices"][0]["message"]["content"].strip()
+    if text:
+        logger.info("[AI_VISION_OCR] %s extracted with %s (%d chars)", label, model, len(text))
+    return text
