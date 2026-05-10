@@ -939,6 +939,8 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
                     file.file.close()
 
                 file.extracted_text = extracted_text
+                # Long OCR/API calls can leave PostgreSQL connections stale.
+                close_old_connections()
                 file.save(update_fields=["extracted_text"])
                 extracted_len = len(extracted_text or '')
                 del extracted_text  # Free RAM immediately
@@ -968,6 +970,7 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
                                 )
                             )
             if all_chunks_to_create:
+                close_old_connections()
                 UploadedChunk.objects.bulk_create(
                     all_chunks_to_create,
                     batch_size=500,
@@ -992,6 +995,7 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
             upload_session.summary = summary_result.data
             upload_session.processing_status = UploadSession.STATUS_COMPLETED
             upload_session.processing_completed_at = timezone.now()
+            close_old_connections()
             upload_session.save(
                 update_fields=[
                     "summary",
@@ -1008,6 +1012,7 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
             upload_session.processing_status = UploadSession.STATUS_FAILED
             upload_session.processing_error = summary_result.error
             upload_session.processing_completed_at = timezone.now()
+            close_old_connections()
             upload_session.save(
                 update_fields=[
                     "processing_status",
@@ -1018,9 +1023,7 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
 
         logger.info("[SESSION %s] Processing completed in %.1fs", upload_session_id, total_elapsed)
         log_memory(f"[SESSION {upload_session_id}] END")
-        # Force unload embedding model and run GC to free RAM immediately
-        from .embedding_service import _maybe_unload
-        _maybe_unload(force=True)
+        # Run GC after large PDF strings/chunks are released.
         gc.collect()
         return results
 
@@ -1030,6 +1033,7 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
         upload_session.processing_status = UploadSession.STATUS_FAILED
         upload_session.processing_error = str(exc)
         upload_session.processing_completed_at = timezone.now()
+        close_old_connections()
         upload_session.save(
             update_fields=[
                 "processing_status",
@@ -1038,9 +1042,7 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
             ]
         )
         log_memory(f"[SESSION {upload_session_id}] FAILED")
-        # Force unload embedding model even on failure
-        from .embedding_service import _maybe_unload
-        _maybe_unload(force=True)
+        # Run GC after large PDF strings/chunks are released.
         gc.collect()
         return {
             "summary": GenerationResult(

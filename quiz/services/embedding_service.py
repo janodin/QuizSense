@@ -8,11 +8,9 @@ RAM optimization:
 - Batches requests for efficiency.
 """
 
-import gc
 import hashlib
 import logging
 import threading
-import time
 
 import requests
 from django.conf import settings

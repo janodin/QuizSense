@@ -111,8 +111,8 @@ elif os.getenv("USE_POSTGRES", "1") == "1":
             "PASSWORD": os.getenv("POSTGRES_PASSWORD", "postgres"),
             "HOST": os.getenv("POSTGRES_HOST", "localhost"),
             "PORT": os.getenv("POSTGRES_PORT", "5432"),
-            # Hetzner CX22 has 4 GB RAM total.  Reserve ~1 GB for OS + Django +
-            # Gunicorn workers + sentence-transformers model; give PostgreSQL 512 MB.
+            # Hetzner CX22 has 4 GB RAM total. Reserve memory for OS, Django,
+            # Gunicorn/Celery workers, and PostgreSQL.
             "CONN_MAX_AGE": 60,
             "OPTIONS": {
                 "connect_timeout": 10,
@@ -197,7 +197,7 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 AI_PROVIDER_API_KEY = os.getenv('AI_PROVIDER_API_KEY', '')
 
 # Embeddings / RAG
-EMBEDDING_DIMENSIONS = 1536
+EMBEDDING_DIMENSIONS = 384
 
 # Celery Configuration
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
@@ -209,7 +209,7 @@ CELERY_TIMEZONE = 'UTC'
 CELERY_WORKER_POOL = 'solo'
 
 # ─── Memory-safety settings for Celery workers ───────────────────────────────
-# Restart workers after N tasks to prevent memory leaks from PyTorch/numpy.
+# Restart workers after N tasks to prevent memory leaks from C extensions.
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 10
 
 # Restart worker if it exceeds 512 MB RSS (prevents runaway memory).
