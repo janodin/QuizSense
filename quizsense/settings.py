@@ -202,6 +202,9 @@ EMBEDDING_DIMENSIONS = 384
 # Scanned PDF OCR cap. Text-based pages are still extracted without this cap;
 # this only limits pages sent to the AI Vision API.
 AI_VISION_OCR_MAX_PAGES = int(os.getenv('AI_VISION_OCR_MAX_PAGES', '20'))
+AI_VISION_OCR_RENDER_SCALE = int(os.getenv('AI_VISION_OCR_RENDER_SCALE', '3'))
+AI_VISION_OCR_RETRY_RENDER_SCALE = int(os.getenv('AI_VISION_OCR_RETRY_RENDER_SCALE', '4'))
+AI_VISION_OCR_RETRY_MIN_CHARS = int(os.getenv('AI_VISION_OCR_RETRY_MIN_CHARS', '80'))
 
 # Celery Configuration
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
