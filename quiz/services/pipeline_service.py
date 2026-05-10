@@ -979,9 +979,6 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
                     elif filename.endswith(".docx"):
                         from .file_processor import extract_text_from_docx
                         extracted_text = extract_text_from_docx(file.file)
-                    elif filename.endswith(".doc"):
-                        from .file_processor import extract_text_from_doc
-                        extracted_text = extract_text_from_doc(file.file)
                     else:
                         timer.detail(f"Skipping unsupported: {filename}")
                         continue
