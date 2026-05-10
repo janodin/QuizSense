@@ -274,8 +274,7 @@ class GenerationMetric(models.Model):
         ('concept_extraction', 'Concept Extraction'),
     ]
     PROVIDER_CHOICES = [
-        ('minimax', 'MiniMax'),
-        ('gemini', 'Gemini'),
+        ('deepinfra', 'AI Provider'),
     ]
 
     generation_type = models.CharField(max_length=30, choices=GENERATION_TYPE_CHOICES)
@@ -285,10 +284,6 @@ class GenerationMetric(models.Model):
     cache_hit = models.BooleanField(default=False)
     output_validated = models.BooleanField(default=False, null=True)
     output_length = models.PositiveIntegerField(default=0)
-    was_fallback = models.BooleanField(
-        default=False,
-        help_text="True if this generation required a fallback to a secondary provider"
-    )
     error_message = models.TextField(blank=True, null=True)
     related_attempt = models.ForeignKey(QuizAttempt, on_delete=models.SET_NULL, null=True, blank=True, related_name='generation_metrics')
     related_session = models.ForeignKey(UploadSession, on_delete=models.SET_NULL, null=True, blank=True, related_name='generation_metrics')
@@ -300,7 +295,6 @@ class GenerationMetric(models.Model):
             models.Index(fields=['generation_type', 'created_at']),
             models.Index(fields=['provider', 'created_at']),
             models.Index(fields=['success', 'created_at']),
-            models.Index(fields=['was_fallback']),
             models.Index(fields=['output_validated']),
             models.Index(fields=['generation_type', 'output_length']),
         ]

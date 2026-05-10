@@ -193,14 +193,8 @@ if not DEBUG:
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
 
-# MiniMax API
-MINIMAX_API_KEY = os.getenv('MINIMAX_API_KEY', '')
-
-# Groq API (gpt-oss-120B with high reasoning)
-GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
-
-# Google Gemini API
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
+# AI Provider API Key (default: DeepInfra)
+AI_PROVIDER_API_KEY = os.getenv('AI_PROVIDER_API_KEY', '')
 
 # Embeddings / RAG
 EMBEDDING_DIMENSIONS = 1536

@@ -475,30 +475,6 @@ def evaluation(request):
             'avg_output_length': row['avg_output_length'] or 0,
         }
 
-    # Single grouped query for provider stats
-    provider_qs = GenerationMetric.objects.values('provider').annotate(
-        total=Count('id'),
-        success_count=Count('id', filter=Q(success=True)),
-    )
-    provider_success = {}
-    for row in provider_qs:
-        code = row['provider']
-        total = row['total']
-        provider_success[code] = {
-            'label': dict(GenerationMetric.PROVIDER_CHOICES).get(code, code.title()),
-            'total': total,
-            'success_rate': (row['success_count'] / total * 100) if total else 0,
-        }
-
-    # Fallback rate in one query
-    fallback_stats = GenerationMetric.objects.aggregate(
-        fallback_count=Count('id', filter=Q(was_fallback=True)),
-        total_attempts=Count('id', filter=~Q(provider='cache')),
-    )
-    fallback_rate = None
-    if fallback_stats['total_attempts'] > 0:
-        fallback_rate = (fallback_stats['fallback_count'] / fallback_stats['total_attempts']) * 100
-
     # Quiz and Summary validation in single aggregates
     quiz_stats = GenerationMetric.objects.filter(generation_type='quiz', output_length__gt=0).aggregate(
         total=Count('id'),
@@ -523,8 +499,7 @@ def evaluation(request):
 
         # Model Generation
         'metric_stats': metric_stats,
-        'provider_success': provider_success,
-        'fallback_rate': round(fallback_rate, 1) if fallback_rate is not None else None,
+
         'quiz_validation_pass_rate': round(quiz_validation_pass_rate, 1) if quiz_validation_pass_rate is not None else None,
         'summary_validation_pass_rate': round(summary_validation_pass_rate, 1) if summary_validation_pass_rate is not None else None,
         'has_generation_metrics': GenerationMetric.objects.exists(),

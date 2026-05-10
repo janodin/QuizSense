@@ -11,7 +11,7 @@ Key functions:
 - _process_quiz_for_session(): generates quiz from upload session
 - _process_recommendations_for_attempt(): generates study recommendations
 
-All use MiniMax M2.7 as primary AI provider with Gemini fallback.
+All use the configured AI provider (default: openai/gpt-oss-120b via DeepInfra API).
 """
 
 import hashlib
@@ -66,7 +66,6 @@ class GenerationResult:
     generation_type: Optional[GenerationType] = None
     duration_ms: float = 0
     provider_name: Optional[str] = None
-    was_fallback: bool = False
 
 
 @dataclass
@@ -102,157 +101,10 @@ class AIProvider(ABC):
         pass
 
 
-class GeminiProvider(AIProvider):
+class ModelProvider(AIProvider):
+    """Uses the configured AI provider API (default: DeepInfra with openai/gpt-oss-120b)."""
     def __init__(self):
-        self._client = None
-        self._client_lock = threading.Lock()
-        self._semaphore = threading.Semaphore(4)
-
-    def _get_client(self):
-        if self._client is None:
-            with self._client_lock:
-                if self._client is None:
-                    import google.genai as genai
-                    from django.conf import settings
-
-                    self._client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        return self._client
-
-    def _chat(self, prompt: str, max_tokens: int = 1024) -> str:
-        from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
-
-        def _is_503(exc):
-            if hasattr(exc, '__cause__'):
-                cause = exc.__cause__
-                if hasattr(cause, 'args') and cause.args:
-                    args = cause.args[0] if isinstance(cause.args[0], dict) else {}
-                    if isinstance(args, dict):
-                        return args.get('status') == 'UNAVAILABLE'
-            return False
-
-        @retry(
-            stop=stop_after_attempt(2),
-            wait=wait_exponential(multiplier=1, min=2, max=15),
-            retry=retry_if_exception(_is_503),
-            reraise=True,
-        )
-        def _call():
-            self._semaphore.acquire()
-            try:
-                client = self._get_client()
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash-lite",
-                    contents=prompt,
-                    config={"max_output_tokens": max_tokens, "system_instruction": _SYSTEM_PROMPT},
-                )
-                return response.text or ""
-            finally:
-                self._semaphore.release()
-
-        return _call()
-
-    def generate_summary(
-        self, text: str, chapter_title: str, cross_reference_notes: str
-    ) -> str:
-        prompt = (
-            "You are an expert programming instructor. Based on the context below, "
-            "write a polished, richly-formatted study summary in 180-260 words.\n\n"
-            f"Chapter: {chapter_title}\n\n"
-            f"Context:\n{text[:12000]}\n\n"
-            f"Cross-Reference Notes:\n{cross_reference_notes or 'N/A'}\n\n"
-            "Formatting rules (IMPORTANT):\n"
-            "- Wrap every programming keyword, function name, variable, syntax, or code snippet in backticks, e.g. `for`, `while`, `print()`, `x = 5`, `if-else`.\n"
-            "- Use **bold** for emphasis on critical terms and section labels.\n"
-            "- Use a clean Markdown structure with headings and bullet lists.\n\n"
-            "Use this exact Markdown structure:\n"
-            "## Study Summary\n"
-            "### Overview\n"
-            "Write 2-3 clear sentences explaining the main idea of the material. Use backticks for any code mentioned.\n\n"
-            "### Key Concepts\n"
-            "- **Concept name**: Explanation with `code` keywords highlighted.\n"
-            "- **Another concept**: Explanation with `code` keywords highlighted.\n\n"
-            "### Review Focus\n"
-            "- **Label**: Actionable item with `code` keywords where relevant.\n"
-            "- **Label**: Another actionable item with `code` keywords.\n\n"
-            "Return only the study summary Markdown now:"
-        )
-        return self._chat(prompt, max_tokens=1024)
-
-    def extract_concepts(self, text: str) -> str:
-        prompt = (
-            "You are analyzing a section of a programming textbook. "
-            "Read the text carefully and extract the key information.\n\n"
-            f"Text:\n{text[:12000]}\n\n"
-            "Extract and list:\n"
-            "1. Key concepts and definitions mentioned\n"
-            "2. Important code patterns, algorithms, or techniques\n"
-            "3. Best practices, rules, warnings, or common mistakes\n"
-            "4. Topics covered in this section\n\n"
-            "Be thorough but concise. Return as plain text."
-        )
-        return self._chat(prompt, max_tokens=1024)
-
-    def generate_mcq(
-        self, text: str, chapter_title: str, cross_reference_notes: str
-    ) -> list:
-        import json
-        import re
-
-        prompt = (
-            "You are an expert programming instructor. Generate exactly 10 MCQs as a JSON array.\n\n"
-            f"Chapter: {chapter_title}\n\n"
-            f"Retrieved Context:\n{text[:6000]}\n\n"
-            f"Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes or 'N/A'}\n\n"
-            'Return ONLY a valid JSON array. Each object: {{"question", "choices":{{"A","B","C","D"}}, "correct_answer", "topic"}}'
-        )
-        raw = self._chat(prompt, max_tokens=4096)
-
-        cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
-        start = cleaned.find("[")
-        end = cleaned.rfind("]")
-        if start == -1 or end == -1:
-            raise ValueError(f"AI Response parsing failed. Raw starts with: {raw[:50]}")
-
-        questions = json.loads(cleaned[start:end + 1])
-        return questions[:10]
-
-    def generate_recommendations(
-        self, quiz_attempt: QuizAttempt, questions_with_answers: list
-    ) -> str:
-        chapter_title = (
-            quiz_attempt.quiz.chapter.title if quiz_attempt.quiz.chapter else "Fundamentals"
-        )
-
-        topic_lines = []
-        wrong_lines = []
-        for qa in questions_with_answers:
-            topic_lines.append(f"  - [{qa['topic']}] {qa['question'][:120]}...")
-            if not qa['is_correct']:
-                wrong_lines.append(
-                    f"  - Topic: {qa['topic']} | Q: {qa['question'][:100]}... "
-                    f"| Correct: {qa['correct_answer']} | Student answered: {qa['selected_answer']}"
-                )
-
-        topic_summary = "\n".join(topic_lines) or "  (no data)"
-        wrong_summary = "\n".join(wrong_lines) or "  (all correct!)"
-
-        prompt = (
-            f"You are an expert programming instructor. Provide 3-4 concise, actionable study recommendations "
-            f"for a student who scored {quiz_attempt.score}/{quiz_attempt.total_questions} on \"{chapter_title}\".\n\n"
-            f"--- All Questions ---\n{topic_summary}\n\n"
-            f"--- Incorrect Answers ---\n{wrong_summary}\n\n"
-            f"Focus on the weak topics and explain what the student should study to improve."
-        )
-        return self._chat(prompt, max_tokens=1024)
-
-    def get_provider_name(self) -> str:
-        return "gemini"
-
-
-class GroqProvider(AIProvider):
-    """Uses Groq API with gpt-oss-120B model (high reasoning)."""
-    def __init__(self):
-        self._url = "https://api.groq.com/openai/v1/chat/completions"
+        self._url = "https://api.deepinfra.com/v1/openai/chat/completions"
         self._model = "openai/gpt-oss-120b"
 
     def _make_request(self, prompt: str, max_tokens: int = 1024, timeout: int = 120) -> str:
@@ -262,16 +114,16 @@ class GroqProvider(AIProvider):
         from django.conf import settings
 
         start_time = time.time()
-        logger.info("[GROQ] Sending request (prompt_length=%d, max_tokens=%d, timeout=%d)", len(prompt), max_tokens, timeout)
+        logger.info("[AI_PROVIDER] Sending request (prompt_length=%d, max_tokens=%d, timeout=%d)", len(prompt), max_tokens, timeout)
 
         headers = {
-            "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+            "Authorization": f"Bearer {settings.AI_PROVIDER_API_KEY}",
             "Content-Type": "application/json",
         }
         payload = {
             "model": self._model,
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT + "\n\nReasoning: high"},
+                {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             "max_tokens": max_tokens,
@@ -281,13 +133,13 @@ class GroqProvider(AIProvider):
         try:
             response = requests.post(self._url, headers=headers, json=payload, timeout=timeout)
             elapsed = time.time() - start_time
-            logger.info("[GROQ] Response received in %.1fs (status=%d)", elapsed, response.status_code)
+            logger.info("[AI_PROVIDER] Response received in %.1fs (status=%d)", elapsed, response.status_code)
         except requests.exceptions.Timeout:
-            logger.error("[GROQ] Request timed out after %ds", timeout)
-            raise ValueError(f"Groq API request timed out after {timeout} seconds")
+            logger.error("[AI_PROVIDER] Request timed out after %ds", timeout)
+            raise ValueError(f"AI provider request timed out after {timeout} seconds")
         except requests.exceptions.ConnectionError as e:
-            logger.error("[GROQ] Connection error: %s", e)
-            raise ValueError(f"Groq API connection error: {e}")
+            logger.error("[AI_PROVIDER] Connection error: %s", e)
+            raise ValueError(f"AI provider connection error: {e}")
 
         if response.status_code != 200:
             try:
@@ -295,18 +147,18 @@ class GroqProvider(AIProvider):
                 msg = error_data.get("error", {}).get("message") or response.text
             except Exception:
                 msg = response.text
-            logger.error("[GROQ] API error (status=%d): %s", response.status_code, msg)
-            raise ValueError(f"Groq API error ({response.status_code}): {msg}")
+            logger.error("[AI_PROVIDER] API error (status=%d): %s", response.status_code, msg)
+            raise ValueError(f"AI provider error ({response.status_code}): {msg}")
 
         try:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
             if not content:
-                raise ValueError("Groq returned empty response")
+                raise ValueError("AI provider returned empty response")
             return content
         except (KeyError, IndexError, json.JSONDecodeError) as e:
-            logger.error("[GROQ] Failed to parse response: %s", e)
-            raise ValueError(f"Groq response parsing failed: {e}")
+            logger.error("[AI_PROVIDER] Failed to parse response: %s", e)
+            raise ValueError(f"AI provider response parsing failed: {e}")
 
     def generate_summary(
         self, text: str, chapter_title: str, cross_reference_notes: str
@@ -407,333 +259,19 @@ class GroqProvider(AIProvider):
         return self._make_request(prompt, timeout=90)
 
     def get_provider_name(self) -> str:
-        return "groq"
+        return "deepinfra"
 
 
-class MiniMaxProvider(AIProvider):
-    def __init__(self):
-        self._url = "https://api.minimax.io/anthropic/v1/messages"
-        self._model = "MiniMax-M2.7"
-
-    def _make_request(self, prompt: str, max_tokens: int = 1024, timeout: int = 60) -> str:
-        import json
-        import time
-        import requests
-        from django.conf import settings
-
-        start_time = time.time()
-        logger.info("[MINIMAX] Sending request (prompt_length=%d, max_tokens=%d, timeout=%d)", len(prompt), max_tokens, timeout)
-
-        headers = {
-            "Authorization": f"Bearer {settings.MINIMAX_API_KEY}",
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true",
-        }
-        payload = {
-            "model": self._model,
-            "system": _SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-        }
-
-        try:
-            response = requests.post(self._url, headers=headers, json=payload, timeout=timeout)
-            elapsed = time.time() - start_time
-            logger.info("[MINIMAX] Response received in %.1fs (status=%d)", elapsed, response.status_code)
-        except requests.exceptions.Timeout:
-            logger.error("[MINIMAX] Request timed out after %ds", timeout)
-            raise ValueError(f"MiniMax API request timed out after {timeout} seconds")
-        except requests.exceptions.ConnectionError as e:
-            logger.error("[MINIMAX] Connection error: %s", e)
-            raise ValueError(f"MiniMax API connection error: {e}")
-
-        if response.status_code != 200:
-            try:
-                error_data = response.json()
-                msg = (
-                    error_data.get("error", {}).get("message")
-                    or error_data.get("base_resp", {}).get("status_msg")
-                    or response.text
-                )
-            except Exception:
-                msg = response.text
-            raise ValueError(f"MiniMax HTTP {response.status_code}: {msg}")
-
-        data = response.json()
-
-        if "error" in data:
-            msg = data["error"].get("message", str(data["error"]))
-            raise ValueError(f"MiniMax API Error: {msg}")
-
-        if "base_resp" in data and data["base_resp"].get("status_code") != 0:
-            msg = data["base_resp"].get("status_msg", f"code {data['base_resp']['status_code']}")
-            raise ValueError(f"MiniMax API Error: {msg}")
-
-        if data.get("type") == "message":
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    return block["text"]
-        return ""
-
-    def generate_summary(
-        self, text: str, chapter_title: str, cross_reference_notes: str
-    ) -> str:
-        prompt = (
-            "You are an expert programming instructor. Based on the context below, "
-            "write a polished, richly-formatted study summary in 180-260 words.\n\n"
-            f"Chapter: {chapter_title}\n\n"
-            f"Context:\n{text[:12000]}\n\n"
-            f"Cross-Reference Notes:\n{cross_reference_notes or 'N/A'}\n\n"
-            "Formatting rules (IMPORTANT):\n"
-            "- Wrap every programming keyword, function name, variable, syntax, or code snippet in backticks, e.g. `for`, `while`, `print()`, `x = 5`, `if-else`.\n"
-            "- Use **bold** for emphasis on critical terms and section labels.\n"
-            "- Use a clean Markdown structure with headings and bullet lists.\n\n"
-            "Use this exact Markdown structure:\n"
-            "## Study Summary\n"
-            "### Overview\n"
-            "Write 2-3 clear sentences explaining the main idea of the material. Use backticks for any code mentioned.\n\n"
-            "### Key Concepts\n"
-            "- **Concept name**: Explanation with `code` keywords highlighted.\n"
-            "- **Another concept**: Explanation with `code` keywords highlighted.\n\n"
-            "### Review Focus\n"
-            "- **Label**: Actionable item with `code` keywords where relevant.\n"
-            "- **Label**: Another actionable item with `code` keywords.\n\n"
-            "Return only the study summary Markdown now:"
-        )
-        return self._make_request(prompt)
-
-    def extract_concepts(self, text: str) -> str:
-        prompt = (
-            "You are analyzing a section of a programming textbook. "
-            "Read the text carefully and extract the key information.\n\n"
-            f"Text:\n{text[:12000]}\n\n"
-            "Extract and list:\n"
-            "1. Key concepts and definitions mentioned\n"
-            "2. Important code patterns, algorithms, or techniques\n"
-            "3. Best practices, rules, warnings, or common mistakes\n"
-            "4. Topics covered in this section\n\n"
-            "Be thorough but concise. Return as plain text."
-        )
-        return self._make_request(prompt, max_tokens=1024)
-
-    def generate_mcq(
-        self, text: str, chapter_title: str, cross_reference_notes: str
-    ) -> list:
-        import json
-        import re
-
-        prompt = (
-            "You are an expert programming instructor. Generate exactly 10 MCQs as a JSON array.\n\n"
-            f"Chapter: {chapter_title}\n\n"
-            f"Retrieved Context:\n{text[:12000]}\n\n"
-            f"Cross-Reference Notes (textbook topic matches):\n{cross_reference_notes or 'N/A'}\n\n"
-            'Return ONLY a valid JSON array. Each object: {{"question", "choices":{{"A","B","C","D"}}, "correct_answer", "topic"}}'
-        )
-        raw = self._make_request(prompt, max_tokens=4096, timeout=45)
-
-        cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
-        start = cleaned.find("[")
-        end = cleaned.rfind("]")
-        if start == -1 or end == -1:
-            raise ValueError(f"AI Response parsing failed. Raw starts with: {raw[:50]}")
-
-        questions = json.loads(cleaned[start:end + 1])
-        return questions[:10]
-
-    def generate_recommendations(
-        self, quiz_attempt: QuizAttempt, questions_with_answers: list
-    ) -> str:
-        chapter_title = (
-            quiz_attempt.quiz.chapter.title if quiz_attempt.quiz.chapter else "Fundamentals"
-        )
-
-        topic_lines = []
-        wrong_lines = []
-        for qa in questions_with_answers:
-            topic_lines.append(f"  - [{qa['topic']}] {qa['question'][:120]}...")
-            if not qa['is_correct']:
-                wrong_lines.append(
-                    f"  - Topic: {qa['topic']} | Q: {qa['question'][:100]}... "
-                    f"| Correct: {qa['correct_answer']} | Student answered: {qa['selected_answer']}"
-                )
-
-        topic_summary = "\n".join(topic_lines) or "  (no data)"
-        wrong_summary = "\n".join(wrong_lines) or "  (all correct!)"
-
-        prompt = (
-            f"You are an expert programming instructor. Provide 3-4 concise, actionable study recommendations "
-            f"for a student who scored {quiz_attempt.score}/{quiz_attempt.total_questions} on \"{chapter_title}\".\n\n"
-            f"--- All Questions ---\n{topic_summary}\n\n"
-            f"--- Incorrect Answers ---\n{wrong_summary}\n\n"
-            f"Focus on the weak topics and explain what the student should study to improve."
-        )
-        return self._make_request(prompt, timeout=45)
-
-    def get_provider_name(self) -> str:
-        return "minimax"
-
-
-class MultiProvider:
-    def __init__(self):
-        self._providers: list[AIProvider] = []
-
-    def add_provider(self, provider: AIProvider) -> "MultiProvider":
-        self._providers.append(provider)
-        return self
-
-    def generate_summary(
-        self, text: str, chapter_title: str, cross_reference_notes: str
-    ) -> GenerationResult:
-        start = timezone.now()
-        last_error = None
-
-        for i, provider in enumerate(self._providers):
-            try:
-                result = provider.generate_summary(text, chapter_title, cross_reference_notes)
-                duration = (timezone.now() - start).total_seconds() * 1000
-                return GenerationResult(
-                    success=True,
-                    data=result,
-                    generation_type=GenerationType.SUMMARY,
-                    duration_ms=duration,
-                    provider_name=provider.get_provider_name(),
-                    was_fallback=(i > 0),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Summary generation failed with %s: %s",
-                    provider.get_provider_name(),
-                    exc,
-                )
-                last_error = str(exc)
-                continue
-
-        duration = (timezone.now() - start).total_seconds() * 1000
-        return GenerationResult(
-            success=False,
-            error=last_error,
-            generation_type=GenerationType.SUMMARY,
-            duration_ms=duration,
-        )
-
-    def generate_mcq(
-        self, text: str, chapter_title: str, cross_reference_notes: str
-    ) -> GenerationResult:
-        start = timezone.now()
-        last_error = None
-
-        for i, provider in enumerate(self._providers):
-            try:
-                result = provider.generate_mcq(text, chapter_title, cross_reference_notes)
-                duration = (timezone.now() - start).total_seconds() * 1000
-                return GenerationResult(
-                    success=True,
-                    data=result,
-                    generation_type=GenerationType.QUIZ,
-                    duration_ms=duration,
-                    provider_name=provider.get_provider_name(),
-                    was_fallback=(i > 0),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "MCQ generation failed with %s: %s",
-                    provider.get_provider_name(),
-                    exc,
-                )
-                last_error = str(exc)
-                continue
-
-        duration = (timezone.now() - start).total_seconds() * 1000
-        return GenerationResult(
-            success=False,
-            error=last_error,
-            generation_type=GenerationType.QUIZ,
-            duration_ms=duration,
-        )
-
-    def generate_recommendations(
-        self, quiz_attempt: QuizAttempt, questions_with_answers: list
-    ) -> GenerationResult:
-        start = timezone.now()
-        last_error = None
-
-        for i, provider in enumerate(self._providers):
-            try:
-                result = provider.generate_recommendations(quiz_attempt, questions_with_answers)
-                duration = (timezone.now() - start).total_seconds() * 1000
-                return GenerationResult(
-                    success=True,
-                    data=result,
-                    generation_type=GenerationType.RECOMMENDATIONS,
-                    duration_ms=duration,
-                    provider_name=provider.get_provider_name(),
-                    was_fallback=(i > 0),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Recommendations generation failed with %s: %s",
-                    provider.get_provider_name(),
-                    exc,
-                )
-                last_error = str(exc)
-                continue
-
-        duration = (timezone.now() - start).total_seconds() * 1000
-        return GenerationResult(
-            success=False,
-            error=last_error,
-            generation_type=GenerationType.RECOMMENDATIONS,
-            duration_ms=duration,
-        )
-
-    def extract_concepts(self, text: str) -> GenerationResult:
-        """Map-phase: extract key concepts from a chunk, trying each provider."""
-        start = timezone.now()
-        last_error = None
-
-        for i, provider in enumerate(self._providers):
-            try:
-                result = provider.extract_concepts(text)
-                duration = (timezone.now() - start).total_seconds() * 1000
-                return GenerationResult(
-                    success=True,
-                    data=result,
-                    generation_type=GenerationType.SUMMARY,
-                    duration_ms=duration,
-                    provider_name=provider.get_provider_name(),
-                    was_fallback=(i > 0),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Concept extraction failed with %s: %s",
-                    provider.get_provider_name(),
-                    exc,
-                )
-                last_error = str(exc)
-                continue
-
-        duration = (timezone.now() - start).total_seconds() * 1000
-        return GenerationResult(
-            success=False,
-            error=last_error,
-            generation_type=GenerationType.SUMMARY,
-            duration_ms=duration,
-        )
-
-
-_default_provider: Optional[MultiProvider] = None
+_default_provider: Optional[ModelProvider] = None
 _provider_lock = threading.Lock()
 
 
-def get_generation_provider() -> MultiProvider:
+def get_generation_provider() -> ModelProvider:
     global _default_provider
     if _default_provider is None:
         with _provider_lock:
             if _default_provider is None:
-                _default_provider = MultiProvider().add_provider(
-                    GroqProvider()
-                ).add_provider(GeminiProvider())
+                _default_provider = ModelProvider()
     return _default_provider
 
 
@@ -804,7 +342,6 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
                 data=cached_summary,
                 generation_type=GenerationType.SUMMARY,
                 provider_name='cache',
-                was_fallback=False,
             )
         else:
             # Cache miss — retrieve context via RAG before calling AI
@@ -823,8 +360,23 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
                 )
             else:
                 _detail(f"Document is short ({total_len} chars) — using single-pass summary...")
-                _detail("Calling AI provider (MiniMax/Gemini)...")
-                result = provider.generate_summary(combined_text, chapter_title, cross_ref)
+                _detail("Calling AI provider...")
+                try:
+                    summary_text = provider.generate_summary(combined_text, chapter_title, cross_ref)
+                    result = GenerationResult(
+                        success=True,
+                        data=summary_text,
+                        generation_type=GenerationType.SUMMARY,
+                        provider_name=provider.get_provider_name(),
+                    )
+                except Exception as e:
+                    _detail(f"AI call failed: {e}")
+                    result = GenerationResult(
+                        success=False,
+                        error=str(e),
+                        generation_type=GenerationType.SUMMARY,
+                        provider_name=provider.get_provider_name(),
+                    )
 
             if result and result.success:
                 if _validate_summary(result.data):
@@ -843,7 +395,7 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
                         generation_type=GenerationType.SUMMARY,
                         duration_ms=result.duration_ms,
                         provider_name=result.provider_name,
-                        was_fallback=getattr(result, 'was_fallback', False) or False,
+
                     )
             elif result:
                 _detail(f"AI call failed: {result.error}")
@@ -862,7 +414,6 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
             output_length=output_length,
             related_session=upload_session if isinstance(upload_session, UploadSession) else None,
             output_validated=output_validated,
-            was_fallback=getattr(result, 'was_fallback', False) or False,
         )
 
     return result if result is not None else GenerationResult(
@@ -876,7 +427,7 @@ def _map_reduce_summary(
     upload_session: UploadSession,
     all_text: str,
     chapter_title: str,
-    provider: MultiProvider,
+    provider: ModelProvider,
     _detail,
 ) -> GenerationResult:
     """Two-pass summary: extract concepts from sections IN PARALLEL, then synthesize."""
@@ -909,21 +460,24 @@ def _map_reduce_summary(
         chunk = all_text[pos : pos + chunk_size]
         pct = int((pos / total_len) * 100)
         _detail(f"MAP [{i + 1}/{len(positions)}] extracting concepts from ~{pct}% of document...")
-        map_result = provider.extract_concepts(chunk)
-        return i, pct, map_result
+        try:
+            concepts = provider.extract_concepts(chunk)
+            return i, pct, concepts, None
+        except Exception as e:
+            return i, pct, None, str(e)
 
     with ThreadPoolExecutor(max_workers=min(4, len(positions))) as executor:
         futures = [executor.submit(_extract_worker, (i, pos)) for i, pos in enumerate(positions)]
         for future in as_completed(futures):
             try:
-                i, pct, map_result = future.result()
-                if map_result.success:
+                i, pct, concepts, error = future.result()
+                if concepts:
                     concept_notes[i] = (
-                        f"=== SECTION {i + 1} (position {pct}%) ===\n{map_result.data}\n"
+                        f"=== SECTION {i + 1} (position {pct}%) ===\n{concepts}\n"
                     )
-                    _detail(f"MAP [{i + 1}/{len(positions)}] extracted {len(map_result.data)} chars")
+                    _detail(f"MAP [{i + 1}/{len(positions)}] extracted {len(concepts)} chars")
                 else:
-                    _detail(f"MAP [{i + 1}/{len(positions)}] failed: {map_result.error}")
+                    _detail(f"MAP [{i + 1}/{len(positions)}] failed: {error}")
             except Exception as exc:
                 _detail(f"MAP worker crashed: {exc}")
 
@@ -943,16 +497,27 @@ def _map_reduce_summary(
     combined_notes = "\n".join(concept_notes)
     _detail(f"REDUCE: synthesizing {len(combined_notes)} chars of extracted concepts...")
 
-    reduce_result = provider.generate_summary(combined_notes, chapter_title, "N/A")
-
-    if reduce_result.success:
-        _detail(f"REDUCE: final summary received ({len(reduce_result.data)} chars)")
-    else:
-        _detail(f"REDUCE: synthesis failed: {reduce_result.error}")
-
-    total_duration = (timezone.now() - start_total).total_seconds() * 1000
-    reduce_result.duration_ms = total_duration
-    return reduce_result
+    try:
+        final_summary = provider.generate_summary(combined_notes, chapter_title, "N/A")
+        _detail(f"REDUCE: final summary received ({len(final_summary)} chars)")
+        total_duration = (timezone.now() - start_total).total_seconds() * 1000
+        return GenerationResult(
+            success=True,
+            data=final_summary,
+            generation_type=GenerationType.SUMMARY,
+            duration_ms=total_duration,
+            provider_name=provider.get_provider_name(),
+        )
+    except Exception as e:
+        _detail(f"REDUCE: synthesis failed: {e}")
+        total_duration = (timezone.now() - start_total).total_seconds() * 1000
+        return GenerationResult(
+            success=False,
+            error=str(e),
+            generation_type=GenerationType.SUMMARY,
+            duration_ms=total_duration,
+            provider_name=provider.get_provider_name(),
+        )
 
 
 def _process_quiz_for_session(upload_session) -> GenerationResult:
@@ -1019,7 +584,6 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
                     generation_type=GenerationType.QUIZ,
                     duration_ms=original_result.duration_ms if original_result else 0,
                     provider_name=original_result.provider_name if original_result else None,
-                    was_fallback=original_result.was_fallback if original_result else False,
                 )
 
             def _detail(msg):
@@ -1065,14 +629,28 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
                         data=cached_quiz_data,
                         generation_type=GenerationType.QUIZ,
                         provider_name='cache',
-                        was_fallback=False,
                     )
                 else:
-                    result = provider.generate_mcq(
-                        rag_context.context_text,
-                        chapter.title,
-                        rag_context.cross_reference_notes,
-                    )
+                    try:
+                        quiz_data = provider.generate_mcq(
+                            rag_context.context_text,
+                            chapter.title,
+                            rag_context.cross_reference_notes,
+                        )
+                        result = GenerationResult(
+                            success=True,
+                            data=quiz_data,
+                            generation_type=GenerationType.QUIZ,
+                            provider_name=provider.get_provider_name(),
+                        )
+                    except Exception as e:
+                        _detail(f"AI quiz generation failed: {e}")
+                        result = GenerationResult(
+                            success=False,
+                            error=str(e),
+                            generation_type=GenerationType.QUIZ,
+                            provider_name=provider.get_provider_name(),
+                        )
                     if result.success and result.data:
                         cache.set(quiz_cache_key, result.data, timeout=60 * 60 * 24 * 7)
 
@@ -1140,7 +718,7 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
                             generation_type=GenerationType.QUIZ,
                             duration_ms=result.duration_ms,
                             provider_name=result.provider_name,
-                            was_fallback=getattr(result, 'was_fallback', False) or False,
+    
                         )
                 elif result and result.success and not result.data:
                     result = _fail("AI quiz generation returned no data.", original_result=result)
@@ -1188,7 +766,6 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
             output_length=output_length,
             related_session=upload_session if isinstance(upload_session, UploadSession) else None,
             output_validated=output_validated,
-            was_fallback=getattr(result, 'was_fallback', False) or False,
         )
 
     return result if result is not None else GenerationResult(
@@ -1236,11 +813,25 @@ def _process_recommendations_for_attempt(
             data=cached_recommendation,
             generation_type=GenerationType.RECOMMENDATIONS,
             provider_name='cache',
-            was_fallback=False,
         )
     else:
         provider = get_generation_provider()
-        result = provider.generate_recommendations(attempt, questions_with_answers)
+        try:
+            recommendation_text = provider.generate_recommendations(attempt, questions_with_answers)
+            result = GenerationResult(
+                success=True,
+                data=recommendation_text,
+                generation_type=GenerationType.RECOMMENDATIONS,
+                provider_name=provider.get_provider_name(),
+            )
+        except Exception as e:
+            logger.error("[REC] AI recommendation failed: %s", e)
+            result = GenerationResult(
+                success=False,
+                error=str(e),
+                generation_type=GenerationType.RECOMMENDATIONS,
+                provider_name=provider.get_provider_name(),
+            )
 
         if result and result.success:
             if isinstance(result.data, str) and len(result.data) > 50:
@@ -1254,7 +845,6 @@ def _process_recommendations_for_attempt(
                     generation_type=GenerationType.RECOMMENDATIONS,
                     duration_ms=result.duration_ms,
                     provider_name=result.provider_name,
-                    was_fallback=getattr(result, 'was_fallback', False) or False,
                 )
             else:
                 error_msg = "Recommendation validation failed: output too short"
@@ -1267,7 +857,6 @@ def _process_recommendations_for_attempt(
                     generation_type=GenerationType.RECOMMENDATIONS,
                     duration_ms=result.duration_ms,
                     provider_name=result.provider_name,
-                    was_fallback=getattr(result, 'was_fallback', False) or False,
                 )
 
     # Instrument GenerationMetric at the very end
@@ -1287,7 +876,6 @@ def _process_recommendations_for_attempt(
             output_length=output_length,
             related_attempt=attempt,
             output_validated=output_validated,
-            was_fallback=getattr(result, 'was_fallback', False) or False,
         )
 
     return result if result is not None else GenerationResult(

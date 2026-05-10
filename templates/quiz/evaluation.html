@@ -328,15 +328,14 @@
   </div>
   <p class="methodology-box mb-4">
     <strong>Methodology:</strong> Generation quality is assessed via per-type
-    success rates, provider reliability comparisons (MiniMax vs Gemini),
-    fallback rate to Gemini, output validation pass rates, and average output
+    success rates, provider reliability comparisons, output validation pass rates, and average output
     lengths. Success means a non-empty, structurally valid output was produced.
     Validation is an additional structural check on the output content.
   </p>
 
   <div class="row g-4">
     {% if has_generation_metrics %}
-    <div class="col-lg-3 col-md-6">
+    <div class="col-lg-4 col-md-6">
       <div class="metric-card text-center">
         <div class="metric-label mb-2">Quiz Validation Pass Rate</div>
         <div class="metric-value">
@@ -349,7 +348,7 @@
         <small class="text-muted">Structurally valid quiz outputs</small>
       </div>
     </div>
-    <div class="col-lg-3 col-md-6">
+    <div class="col-lg-4 col-md-6">
       <div class="metric-card text-center">
         <div class="metric-label mb-2">Summary Validation Pass Rate</div>
         <div class="metric-value">
@@ -362,23 +361,10 @@
         <small class="text-muted">Structurally valid summary outputs</small>
       </div>
     </div>
-    <div class="col-lg-3 col-md-6">
-      <div class="metric-card text-center">
-        <div class="metric-label mb-2">Fallback Rate (Gemini)</div>
-        <div class="metric-value">
-          {% if fallback_rate is not None %}
-            {{ fallback_rate }}%
-          {% else %}
-            <span class="text-muted">N/A</span>
-          {% endif %}
-        </div>
-        <small class="text-muted">% of calls routed to Gemini</small>
-      </div>
-    </div>
-    <div class="col-lg-3 col-md-6">
+    <div class="col-lg-4 col-md-12">
       <div class="metric-card text-center">
         <div class="metric-label mb-2">Generation Metrics Recorded</div>
-        <div class="metric-value">{% if has_generation_metrics %}Yes{% else %}No{% endif %}</div>
+        <div class="metric-value">Yes</div>
         <small class="text-muted">Instrumentation active</small>
       </div>
     </div>
@@ -394,15 +380,7 @@
 
   {% if has_generation_metrics %}
   <div class="row g-4 mt-1">
-    <div class="col-lg-6">
-      <div class="metric-card">
-        <h6 class="fw-bold mb-3">Provider Success Rate Comparison</h6>
-        <div class="chart-container">
-          <canvas id="providerSuccessChart"></canvas>
-        </div>
-      </div>
-    </div>
-    <div class="col-lg-6">
+    <div class="col-lg-12">
       <div class="metric-card">
         <h6 class="fw-bold mb-3">GenerationMetric Performance</h6>
         <div class="table-responsive">
@@ -504,33 +482,5 @@
     '<div class="empty-state"><i class="bi bi-inbox"></i><p>No retrieval log data available.</p></div>';
   {% endif %}
 
-  // 2. Provider Success Rate Comparison (Bar)
-  {% if has_generation_metrics %}
-  const providerPalette = ['#0d6efd', '#20c997', '#fd7e14', '#dc3545', '#198754', '#6f42c1'];
-  const providerData = [
-    {% for code, data in provider_success.items %}{{ data.success_rate|floatformat:1 }}{% if not forloop.last %}, {% endif %}{% endfor %}
-  ];
-  new Chart(document.getElementById('providerSuccessChart'), {
-    type: 'bar',
-    data: {
-      labels: [
-        {% for code, data in provider_success.items %}'{{ data.label }}'{% if not forloop.last %}, {% endif %}{% endfor %}
-      ],
-      datasets: [{
-        label: 'Success Rate (%)',
-        data: providerData,
-        backgroundColor: providerData.map((_, i) => providerPalette[i % providerPalette.length]),
-        borderRadius: 6
-      }]
-    },
-    options: {
-      ...commonOptions,
-      scales: {
-        y: { beginAtZero: true, max: 100, grid: { color: '#f0f0f0' } },
-        x: { grid: { display: false } }
-      }
-    }
-  });
-  {% endif %}
 </script>
 {% endblock %}

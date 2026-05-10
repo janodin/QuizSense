@@ -106,10 +106,10 @@ The system is designed for **Fundamentals of Programming** with these chapters:
 | **Cache & Broker** | Redis 5.2.1 | Caching, task brokering, embedding cache |
 | **Database** | PostgreSQL | Primary data storage |
 | **Embeddings** | sentence-transformers (all-MiniLM-L6-v2) | Text-to-vector conversion (384 dimensions) |
-| **AI Language Model** | Groq gpt-oss-120B (high reasoning) | Summary, quiz, and recommendation generation |
+| **AI Language Model** | DeepInfra openai/gpt-oss-120B | Summary, quiz, and recommendation generation |
 | **PDF Processing** | PyMuPDF (fitz) | Text extraction from PDFs |
 | **Word Processing** | python-docx | Text extraction from DOCX files |
-| **OCR** | Tesseract + pdf2image | Text extraction from scanned PDFs (fallback) |
+| **OCR** | DeepInfra Vision API (Llama-3.2-90B-Vision) | Cloud-based OCR for scanned PDFs |
 | **Web Server** | Gunicorn + Nginx | Production deployment |
 | **Frontend** | Bootstrap 5.3.3, Chart.js, DOMPurify | UI, data visualization, and XSS protection |
 | **Security** | GZipMiddleware, Rate Limiting, System Prompts | Compression, abuse prevention, token optimization |
@@ -227,7 +227,7 @@ process_upload_session(session_id)
     │   ├── For each uploaded file:
     │   │   ├── PDF → PyMuPDF extracts text
     │   │   ├── DOCX → python-docx extracts text
-    │   │   └── Scanned PDF → Tesseract OCR (max 10 pages)
+    │   │   └── Scanned PDF → DeepInfra Vision OCR (max 10 pages)
     │   └── Save extracted_text to UploadedFile records
     │
     ├── Step 2: CHUNKING_EMBEDDING
@@ -443,13 +443,13 @@ QuizSense uses **session-based ownership** (no login required):
 - 10MB per file limit (max 10 files)
 - PyMuPDF for direct PDF text extraction
 - python-docx for Word document extraction
-- Tesseract OCR fallback for scanned PDFs (capped at 10 pages)
+- DeepInfra Vision OCR for scanned PDFs (capped at 10 pages)
 
 ### AI Generation
 - Study summary from uploaded content
 - 10-question multiple-choice quiz
 - Personalized topic recommendations after quiz
-- Powered by Groq gpt-oss-120B with high reasoning capability
+- Powered by DeepInfra openai/gpt-oss-120B
 - System prompts for better instruction adherence and token optimization
 
 ### Quiz System
@@ -495,8 +495,6 @@ QuizSense uses **session-based ownership** (no login required):
 - Python 3.12+
 - PostgreSQL (or SQLite for development)
 - Redis
-- Tesseract OCR (system package)
-- Poppler (system package, for pdf2image)
 
 ### Quick Start (Development)
 
@@ -626,7 +624,7 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 - **Minimum**: 2 vCPU, 4GB RAM (Hetzner CX22)
 - **OS**: Ubuntu 22.04 LTS
-- **System Packages**: PostgreSQL, Redis, Tesseract, Poppler, libgl1, nginx, certbot
+- **System Packages**: PostgreSQL, Redis, libgl1, nginx, certbot
 
 ### Production Optimizations
 
@@ -649,11 +647,11 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 ### Q: What AI model does the system use?
 
-**A:** The system uses Groq's gpt-oss-120B model with high reasoning capability. This is a 120-billion parameter open-weight model designed for powerful reasoning and complex tasks. It delivers responses in approximately 1-3 seconds, making it significantly faster than comparable models.
+**A:** The system uses DeepInfra's openai/gpt-oss-120B model. This is a 120-billion parameter open-weight model designed for powerful reasoning and complex tasks.
 
 ### Q: How does the system handle scanned PDFs?
 
-**A:** The system first attempts direct text extraction using PyMuPDF. If the PDF is scanned (no extractable text), it falls back to Tesseract OCR. The OCR process is capped at 10 pages to prevent excessive processing time and memory usage.
+**A:** The system first attempts direct text extraction using PyMuPDF, then PyPDF2 as a fallback. If the PDF is scanned (no extractable text), it uses DeepInfra's Vision API (Llama-3.2-90B-Vision) for cloud-based OCR. The OCR process is capped at 10 pages to prevent excessive processing time and memory usage. No local OCR installation is required.
 
 ### Q: How are embeddings stored and searched?
 

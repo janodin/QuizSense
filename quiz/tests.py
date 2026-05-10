@@ -25,7 +25,7 @@ from quiz.views import (
 
 
 def _parse_mcq_response(raw):
-    """Parse MCQ JSON response from AI. Copied from legacy minimax_service.py."""
+    """Parse MCQ JSON response from AI."""
     cleaned = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
     start = cleaned.find("[")
     end = cleaned.rfind("]")
