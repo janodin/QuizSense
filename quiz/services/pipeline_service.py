@@ -367,19 +367,20 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
             provider = get_generation_provider()
             total_len = len(all_text)
 
+            # Always run RAG to retrieve textbook context
+            _detail("Cache miss — retrieving context via RAG...")
+            rag_result = retrieve_context_for_session(upload_session, mode='summary')
+            combined_text = rag_result['context_text'] or all_text[:12000]
+            cross_ref = rag_result['cross_reference_notes']
+            _detail(f"RAG context ready: {len(combined_text)} chars")
+
             if total_len > 15000:
-                _detail("Cache miss — skipping RAG for long-document map-reduce summary.")
+                _detail(f"Long document ({total_len} chars) — using map-reduce summary with RAG context...")
                 result = _map_reduce_summary(
-                    upload_session, all_text, chapter_title, provider, _detail
+                    upload_session, all_text, chapter_title, provider, _detail,
+                    rag_context=combined_text, cross_ref=cross_ref,
                 )
             else:
-                # Short documents benefit from RAG context without paying map-reduce cost.
-                _detail("Cache miss — retrieving context via RAG...")
-                rag_result = retrieve_context_for_session(upload_session, mode='summary')
-                combined_text = rag_result['context_text'] or all_text[:12000]
-                cross_ref = rag_result['cross_reference_notes']
-                _detail(f"RAG context ready: {len(combined_text)} chars")
-
                 _detail(f"Document is short ({total_len} chars) — using single-pass summary...")
                 _detail("Calling AI provider...")
                 try:
@@ -453,8 +454,10 @@ def _map_reduce_summary(
     chapter_title: str,
     provider: ModelProvider,
     _detail,
+    rag_context: str = "",
+    cross_ref: str = "N/A",
 ) -> GenerationResult:
-    """Two-pass summary: extract concepts from sections IN PARALLEL, then synthesize."""
+    """Two-pass summary: extract concepts from sections IN PARALLEL, then synthesize with RAG context."""
     start_total = timezone.now()
     total_len = len(all_text)
 
@@ -534,10 +537,11 @@ def _map_reduce_summary(
 
     # ── REDUCE PHASE: Synthesize all concept notes into final summary ─────────
     combined_notes = "\n".join(concept_notes)
-    _detail(f"REDUCE: synthesizing {len(combined_notes)} chars of extracted concepts...")
+    _detail(f"REDUCE: synthesizing {len(combined_notes)} chars of extracted concepts with RAG context...")
 
+    reduce_context = rag_context if rag_context else combined_notes
     try:
-        final_summary = provider.generate_summary(combined_notes, chapter_title, "N/A")
+        final_summary = provider.generate_summary(reduce_context, chapter_title, cross_ref)
         _detail(f"REDUCE: final summary received ({len(final_summary)} chars)")
         total_duration = (timezone.now() - start_total).total_seconds() * 1000
         return GenerationResult(
@@ -548,10 +552,10 @@ def _map_reduce_summary(
             provider_name=provider.get_provider_name(),
         )
     except Exception as e:
-        _detail(f"REDUCE: synthesis failed: {e}; retrying with shorter concept notes...")
+        _detail(f"REDUCE: synthesis failed: {e}; retrying with shorter context...")
 
     try:
-        final_summary = provider.generate_summary(combined_notes[:5000], chapter_title, "N/A")
+        final_summary = provider.generate_summary(reduce_context[:5000], chapter_title, cross_ref)
         _detail(f"REDUCE RETRY: final summary received ({len(final_summary)} chars)")
     except Exception as retry_error:
         _detail(f"REDUCE RETRY: synthesis failed: {retry_error}; using concept fallback summary.")
