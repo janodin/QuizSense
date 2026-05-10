@@ -10,8 +10,6 @@ Handles text extraction from PDF and Word files using:
 import base64
 import io
 import logging
-import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -104,19 +102,19 @@ def extract_text_from_doc(file_obj):
     Convert a legacy Word (.doc) file to a temporary PDF, extract text from it,
     then delete the temporary conversion directory.
 
-    Requires LibreOffice/soffice to be installed on the machine running Celery.
+    Uses Aspose.Words for Python, a pip-installable converter. No LibreOffice
+    or OS package installation is required.
     """
-    from django.conf import settings
-
-    configured_converter = getattr(settings, "LIBREOFFICE_PATH", "")
-    converter = configured_converter or shutil.which("soffice") or shutil.which("libreoffice")
-    if not converter:
-        logger.warning("Legacy .doc conversion skipped — LibreOffice/soffice not found")
+    try:
+        import aspose.words as aw
+    except ImportError:
+        logger.warning("Legacy .doc conversion skipped — aspose-words is not installed")
         return ""
 
     with tempfile.TemporaryDirectory(prefix="quizsense_doc_") as tmpdir:
         tmp_path = Path(tmpdir)
         doc_path = tmp_path / "upload.doc"
+        pdf_path = tmp_path / "upload.pdf"
 
         file_obj.seek(0)
         with doc_path.open("wb") as output:
@@ -124,35 +122,11 @@ def extract_text_from_doc(file_obj):
                 output.write(chunk)
 
         try:
-            subprocess.run(
-                [
-                    converter,
-                    "--headless",
-                    "--convert-to",
-                    "pdf",
-                    "--outdir",
-                    str(tmp_path),
-                    str(doc_path),
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("Legacy .doc conversion timed out")
+            document = aw.Document(str(doc_path))
+            document.save(str(pdf_path))
+        except Exception as e:
+            logger.warning("Legacy .doc conversion failed: %s", e)
             return ""
-        except subprocess.CalledProcessError as e:
-            logger.warning("Legacy .doc conversion failed: %s", e.stderr.decode(errors="ignore")[:500])
-            return ""
-
-        pdf_path = doc_path.with_suffix(".pdf")
-        if not pdf_path.exists():
-            generated_pdfs = list(tmp_path.glob("*.pdf"))
-            if not generated_pdfs:
-                logger.warning("Legacy .doc conversion produced no PDF")
-                return ""
-            pdf_path = generated_pdfs[0]
 
         with pdf_path.open("rb") as pdf_file:
             return extract_text_from_pdf(pdf_file)

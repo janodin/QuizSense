@@ -203,9 +203,6 @@ EMBEDDING_DIMENSIONS = 384
 # this only limits pages sent to the AI Vision API.
 AI_VISION_OCR_MAX_PAGES = int(os.getenv('AI_VISION_OCR_MAX_PAGES', '100'))
 
-# Optional explicit path to LibreOffice/soffice for legacy .doc conversion.
-LIBREOFFICE_PATH = os.getenv('LIBREOFFICE_PATH', '')
-
 # Celery Configuration
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
