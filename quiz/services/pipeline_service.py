@@ -355,6 +355,7 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
             cache_hit = True
             _detail("Summary cache hit — returning cached result.")
             upload_session.summary = cached_summary
+            close_old_connections()
             upload_session.save(update_fields=["summary"])
             result = GenerationResult(
                 success=True,
@@ -402,12 +403,14 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
                 if _validate_summary(result.data):
                     _detail(f"AI response received: {len(result.data)} chars")
                     upload_session.summary = result.data
+                    close_old_connections()
                     upload_session.save(update_fields=["summary"])
                     cache.set(cache_key, result.data, timeout=60 * 60 * 24 * 7)
                 else:
                     _detail("Summary validation failed")
                     upload_session.processing_status = UploadSession.STATUS_FAILED
                     upload_session.processing_error = "Summary validation failed: missing required sections"
+                    close_old_connections()
                     upload_session.save(update_fields=["processing_status", "processing_error"])
                     result = GenerationResult(
                         success=False,
@@ -424,6 +427,7 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
     if result is not None:
         output_length = len(result.data) if result.success and isinstance(result.data, str) else 0
         output_validated = result.success and _validate_summary(result.data) if result.success else False
+        close_old_connections()
         GenerationMetric.objects.create(
             generation_type='summary',
             provider=result.provider_name or '',

@@ -18,11 +18,7 @@ import PyPDF2
 logger = logging.getLogger(__name__)
 
 PAGE_TEXT_MIN_CHARS = 50
-AI_VISION_OCR_MAX_PAGES = 20
-AI_VISION_OCR_MODEL = "Qwen/Qwen3-VL-30B-A3B-Instruct"
-AI_VISION_OCR_RENDER_SCALE = 3
-AI_VISION_OCR_RETRY_RENDER_SCALE = 4
-AI_VISION_OCR_RETRY_MIN_CHARS = 80
+AI_VISION_OCR_MAX_PAGES = 100
 
 
 def extract_text_from_pdf(file_obj):
@@ -130,16 +126,6 @@ def _parse_pdf_pypdf2(file_obj):
     return "\n".join(text_parts)
 
 
-def _render_page_base64(page, scale):
-    mat = fitz.Matrix(scale, scale)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-    try:
-        img_bytes = pix.tobytes("png")
-        return base64.b64encode(img_bytes).decode("utf-8")
-    finally:
-        pix = None
-
-
 def _ocr_pdf_page_ai_vision(page, page_number):
     """
     Cloud-based OCR using AI Vision API for a single rendered PDF page.
@@ -155,83 +141,53 @@ def _ocr_pdf_page_ai_vision(page, page_number):
             return ""
 
         url = "https://api.deepinfra.com/v1/openai/chat/completions"
-        model = getattr(settings, "AI_VISION_OCR_MODEL", AI_VISION_OCR_MODEL)
+        model = "meta-llama/Llama-3.2-90B-Vision-Instruct"
+
+        mat = fitz.Matrix(2, 2)
+        pix = page.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        prompt = (
-            "You are a precise document OCR engine. Transcribe every visible word from this page. "
-            "Preserve line breaks where possible. Do not summarize. Do not explain. "
-            "Read small text, slide bullets, headings, labels, tables, code, and diagram text. "
-            "Do not infer missing text. Do not describe images. Return only the extracted text. "
-            "If only a few words are visible, return those words."
-        )
-
-        def _request_ocr(scale):
-            img_b64 = _render_page_base64(page, scale)
-            payload = {
-                "model": model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{img_b64}"
-                                },
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extract all text from this image. Return only the extracted text with no additional commentary.",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_b64}"
                             },
-                        ],
-                    }
-                ],
-                "max_tokens": 8192,
-                "temperature": 0.0,
-            }
-            response = requests.post(url, headers=headers, json=payload, timeout=90)
-            if response.status_code != 200:
-                logger.warning(
-                    "[AI_VISION_OCR] HTTP %d on page %d at scale %s: %s",
-                    response.status_code,
-                    page_number,
-                    scale,
-                    response.text[:500],
-                )
-                return ""
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.0,
+        }
 
-            data = response.json()
-            if "choices" not in data:
-                logger.warning(
-                    "[AI_VISION_OCR] Unexpected response on page %d at scale %s: %s",
-                    page_number,
-                    scale,
-                    json.dumps(data)[:500],
-                )
-                return ""
-            return data["choices"][0]["message"]["content"].strip()
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        if response.status_code != 200:
+            logger.warning("[AI_VISION_OCR] HTTP %d on page %d: %s", response.status_code, page_number, response.text[:500])
+            return ""
 
-        render_scale = getattr(settings, "AI_VISION_OCR_RENDER_SCALE", AI_VISION_OCR_RENDER_SCALE)
-        retry_scale = getattr(settings, "AI_VISION_OCR_RETRY_RENDER_SCALE", AI_VISION_OCR_RETRY_RENDER_SCALE)
-        retry_min_chars = getattr(settings, "AI_VISION_OCR_RETRY_MIN_CHARS", AI_VISION_OCR_RETRY_MIN_CHARS)
+        data = response.json()
+        if "choices" not in data:
+            logger.warning("[AI_VISION_OCR] Unexpected response on page %d: %s", page_number, json.dumps(data)[:500])
+            return ""
 
-        page_text = _request_ocr(render_scale)
-        if len(page_text) < retry_min_chars and retry_scale > render_scale:
-            logger.info(
-                "[AI_VISION_OCR] Page %d short OCR output (%d chars); retrying at scale %s",
-                page_number,
-                len(page_text),
-                retry_scale,
-            )
-            retry_text = _request_ocr(retry_scale)
-            if len(retry_text) > len(page_text):
-                page_text = retry_text
-
+        page_text = data["choices"][0]["message"]["content"].strip()
         if page_text:
             logger.info("[AI_VISION_OCR] Page %d extracted (%d chars)", page_number, len(page_text))
-            if len(page_text) < retry_min_chars:
-                logger.info("[AI_VISION_OCR] Page %d short text preview: %r", page_number, page_text[:120])
         return page_text
     except Exception as e:
         logger.warning("AI Vision OCR failed on page %d: %s", page_number, e)
