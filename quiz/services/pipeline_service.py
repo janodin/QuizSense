@@ -107,7 +107,7 @@ class ModelProvider(AIProvider):
         self._url = "https://api.deepinfra.com/v1/openai/chat/completions"
         self._model = "openai/gpt-oss-120b"
 
-    def _make_request(self, prompt: str, max_tokens: int = 1024, timeout: int = 120) -> str:
+    def _make_request(self, prompt: str, max_tokens: int = 8192, timeout: int = 120) -> str:
         import json
         import time
         import requests
@@ -185,7 +185,7 @@ class ModelProvider(AIProvider):
             "- **Label**: Another actionable item with `code` keywords.\n\n"
             "Return only the study summary Markdown now:"
         )
-        return self._make_request(prompt, max_tokens=1024)
+        return self._make_request(prompt)
 
     def extract_concepts(self, text: str) -> str:
         prompt = (
@@ -199,7 +199,7 @@ class ModelProvider(AIProvider):
             "4. Topics covered in this section\n\n"
             "Be thorough but concise. Return as plain text."
         )
-        return self._make_request(prompt, max_tokens=1024)
+        return self._make_request(prompt)
 
     def generate_mcq(
         self, text: str, chapter_title: str, cross_reference_notes: str
@@ -363,21 +363,22 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
                 provider_name='cache',
             )
         else:
-            # Cache miss — retrieve context via RAG before calling AI
-            _detail("Cache miss — retrieving context via RAG...")
-            rag_result = retrieve_context_for_session(upload_session, mode='summary')
-            combined_text = rag_result['context_text'] or all_text[:12000]
-            cross_ref = rag_result['cross_reference_notes']
-            _detail(f"RAG context ready: {len(combined_text)} chars")
-
             provider = get_generation_provider()
             total_len = len(all_text)
 
             if total_len > 15000:
+                _detail("Cache miss — skipping RAG for long-document map-reduce summary.")
                 result = _map_reduce_summary(
                     upload_session, all_text, chapter_title, provider, _detail
                 )
             else:
+                # Short documents benefit from RAG context without paying map-reduce cost.
+                _detail("Cache miss — retrieving context via RAG...")
+                rag_result = retrieve_context_for_session(upload_session, mode='summary')
+                combined_text = rag_result['context_text'] or all_text[:12000]
+                cross_ref = rag_result['cross_reference_notes']
+                _detail(f"RAG context ready: {len(combined_text)} chars")
+
                 _detail(f"Document is short ({total_len} chars) — using single-pass summary...")
                 _detail("Calling AI provider...")
                 try:
@@ -452,6 +453,21 @@ def _map_reduce_summary(
     """Two-pass summary: extract concepts from sections IN PARALLEL, then synthesize."""
     start_total = timezone.now()
     total_len = len(all_text)
+
+    def _fallback_summary_from_concepts(concepts_text: str) -> str:
+        compact = " ".join(concepts_text.split())[:3000]
+        return (
+            "## Study Summary\n"
+            "### Overview\n"
+            f"The material for **{chapter_title}** covers several programming ideas extracted from the uploaded document. "
+            "The summary below is based on the successfully extracted concept notes because the final AI synthesis returned an empty response.\n\n"
+            "### Key Concepts\n"
+            f"- **Extracted concepts**: {compact}\n"
+            "- **Programming focus**: Review any `code`, syntax, definitions, examples, and process steps mentioned in the extracted notes.\n\n"
+            "### Review Focus\n"
+            "- **Re-read weak sections**: Focus on the page sections represented in the extracted concepts.\n"
+            "- **Practice actively**: Turn each major concept into a short explanation, example, or `code` exercise.\n"
+        )
 
     # Calculate number of chunks based on document length (capped at 4)
     num_chunks = min(4, max(2, total_len // 25000))
@@ -528,15 +544,23 @@ def _map_reduce_summary(
             provider_name=provider.get_provider_name(),
         )
     except Exception as e:
-        _detail(f"REDUCE: synthesis failed: {e}")
-        total_duration = (timezone.now() - start_total).total_seconds() * 1000
-        return GenerationResult(
-            success=False,
-            error=str(e),
-            generation_type=GenerationType.SUMMARY,
-            duration_ms=total_duration,
-            provider_name=provider.get_provider_name(),
-        )
+        _detail(f"REDUCE: synthesis failed: {e}; retrying with shorter concept notes...")
+
+    try:
+        final_summary = provider.generate_summary(combined_notes[:5000], chapter_title, "N/A")
+        _detail(f"REDUCE RETRY: final summary received ({len(final_summary)} chars)")
+    except Exception as retry_error:
+        _detail(f"REDUCE RETRY: synthesis failed: {retry_error}; using concept fallback summary.")
+        final_summary = _fallback_summary_from_concepts(combined_notes)
+
+    total_duration = (timezone.now() - start_total).total_seconds() * 1000
+    return GenerationResult(
+        success=True,
+        data=final_summary,
+        generation_type=GenerationType.SUMMARY,
+        duration_ms=total_duration,
+        provider_name=provider.get_provider_name(),
+    )
 
 
 def _process_quiz_for_session(upload_session) -> GenerationResult:
