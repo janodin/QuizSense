@@ -10,6 +10,7 @@ Handles text extraction from PDF and Word files using:
 import base64
 import io
 import logging
+import zipfile
 
 import docx
 import fitz  # PyMuPDF
@@ -88,36 +89,115 @@ def extract_text_from_pdf(file_obj):
 
 def extract_text_from_docx(file_obj):
     """
-    Extract text from a Word (.docx) document using python-docx.
+    Extract text from a Word (.docx) document.
+
+    Reads normal paragraphs, tables, headers/footers, and raw Word XML text.
+    If no real Word text exists, OCR embedded images from image-only DOCX files.
     """
-    document = docx.Document(file_obj)
+    from django.conf import settings
+
+    file_obj.seek(0)
+    file_bytes = file_obj.read()
     text_parts = []
 
-    def _add_paragraphs(paragraphs):
-        for para in paragraphs:
+    try:
+        document = docx.Document(io.BytesIO(file_bytes))
+
+        for para in document.paragraphs:
             text = para.text.strip()
             if text:
                 text_parts.append(text)
 
-    def _add_tables(tables):
-        for table in tables:
+        for table in document.tables:
             for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                if cells:
-                    text_parts.append(" | ".join(cells))
+                row_cells = []
+                for cell in row.cells:
+                    cell_text = " ".join(
+                        para.text.strip()
+                        for para in cell.paragraphs
+                        if para.text.strip()
+                    )
+                    if cell_text:
+                        row_cells.append(cell_text)
+                if row_cells:
+                    text_parts.append(" | ".join(row_cells))
 
-    _add_paragraphs(document.paragraphs)
-    _add_tables(document.tables)
+        for section in document.sections:
+            for header_footer in (section.header, section.footer):
+                for para in header_footer.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        text_parts.append(text)
+    except Exception as e:
+        logger.warning("DOCX structured extraction failed: %s", e)
 
-    for section in document.sections:
-        _add_paragraphs(section.header.paragraphs)
-        _add_tables(section.header.tables)
-        _add_paragraphs(section.footer.paragraphs)
-        _add_tables(section.footer.tables)
+    xml_text = _extract_docx_xml_text(file_bytes)
+    if xml_text:
+        existing = "\n".join(text_parts)
+        if len(xml_text) > len(existing):
+            text_parts = [xml_text]
 
-    extracted = "\n".join(text_parts).strip()
-    logger.info("DOCX extracted %d chars", len(extracted))
-    return extracted
+    extracted_text = "\n".join(text_parts).strip()
+    if extracted_text:
+        logger.info("DOCX text extracted (%d chars)", len(extracted_text))
+        return extracted_text
+
+    ocr_max_pages = getattr(settings, "AI_VISION_OCR_MAX_PAGES", AI_VISION_OCR_MAX_PAGES)
+    logger.info("DOCX returned no Word text; attempting OCR on embedded images (cap=%d)", ocr_max_pages)
+    return _ocr_docx_embedded_images(file_bytes, max_images=ocr_max_pages).strip()
+
+
+def _extract_docx_xml_text(file_bytes):
+    """Fallback extractor for Word XML text nodes, including text boxes/content controls."""
+    try:
+        from xml.etree import ElementTree as ET
+
+        parts = []
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+            xml_names = [
+                name for name in archive.namelist()
+                if name.startswith("word/") and name.endswith(".xml")
+            ]
+            for name in xml_names:
+                try:
+                    root = ET.fromstring(archive.read(name))
+                except Exception:
+                    continue
+                for node in root.iter():
+                    if node.tag.endswith("}t") and node.text and node.text.strip():
+                        parts.append(node.text.strip())
+        return "\n".join(parts).strip()
+    except Exception as e:
+        logger.warning("DOCX XML text extraction failed: %s", e)
+    return ""
+
+
+def _ocr_docx_embedded_images(file_bytes, max_images):
+    """OCR embedded DOCX images for scanned/image-only Word files."""
+    text_parts = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+            image_names = [
+                name for name in archive.namelist()
+                if name.startswith("word/media/")
+                and name.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"))
+            ]
+            image_names.sort()
+            for index, name in enumerate(image_names[:max_images], start=1):
+                image_bytes = archive.read(name)
+                image_text = _ocr_image_bytes_ai_vision(image_bytes, label=f"DOCX image {index}")
+                if image_text:
+                    text_parts.append(f"--- DOCX Image {index} ---\n{image_text}")
+
+            if len(image_names) > max_images:
+                logger.info(
+                    "[AI_VISION_OCR] DOCX OCR skipped %d images because cap reached (%d images)",
+                    len(image_names) - max_images,
+                    max_images,
+                )
+    except Exception as e:
+        logger.warning("DOCX embedded image OCR failed: %s", e)
+    return "\n\n".join(text_parts)
 
 
 def _parse_pdf_pymupdf(file_obj):
@@ -156,22 +236,33 @@ def _ocr_pdf_page_ai_vision(page, page_number):
     Cloud-based OCR using AI Vision API for a single rendered PDF page.
     """
     try:
+        mat = fitz.Matrix(2, 2)
+        pix = page.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
+        page_text = _ocr_image_bytes_ai_vision(img_bytes, label=f"page {page_number}")
+        if page_text:
+            logger.info("[AI_VISION_OCR] Page %d extracted (%d chars)", page_number, len(page_text))
+        return page_text
+    except Exception as e:
+        logger.warning("AI Vision OCR failed on page %d: %s", page_number, e)
+    return ""
+
+
+def _ocr_image_bytes_ai_vision(image_bytes, label):
+    """Send image bytes to AI Vision OCR and return extracted text."""
+    try:
         import json
         import requests
         from django.conf import settings
 
         api_key = getattr(settings, 'AI_PROVIDER_API_KEY', '')
         if not api_key:
-            logger.warning("AI Vision OCR skipped — AI_PROVIDER_API_KEY not set")
+            logger.warning("AI Vision OCR skipped for %s — AI_PROVIDER_API_KEY not set", label)
             return ""
 
         url = "https://api.deepinfra.com/v1/openai/chat/completions"
         model = "meta-llama/Llama-3.2-90B-Vision-Instruct"
-
-        mat = fitz.Matrix(2, 2)
-        pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("png")
-        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        img_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -202,18 +293,18 @@ def _ocr_pdf_page_ai_vision(page, page_number):
 
         response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code != 200:
-            logger.warning("[AI_VISION_OCR] HTTP %d on page %d: %s", response.status_code, page_number, response.text[:500])
+            logger.warning("[AI_VISION_OCR] HTTP %d on %s: %s", response.status_code, label, response.text[:500])
             return ""
 
         data = response.json()
         if "choices" not in data:
-            logger.warning("[AI_VISION_OCR] Unexpected response on page %d: %s", page_number, json.dumps(data)[:500])
+            logger.warning("[AI_VISION_OCR] Unexpected response on %s: %s", label, json.dumps(data)[:500])
             return ""
 
-        page_text = data["choices"][0]["message"]["content"].strip()
-        if page_text:
-            logger.info("[AI_VISION_OCR] Page %d extracted (%d chars)", page_number, len(page_text))
-        return page_text
+        text = data["choices"][0]["message"]["content"].strip()
+        if text:
+            logger.info("[AI_VISION_OCR] %s extracted (%d chars)", label, len(text))
+        return text
     except Exception as e:
-        logger.warning("AI Vision OCR failed on page %d: %s", page_number, e)
+        logger.warning("AI Vision OCR failed on %s: %s", label, e)
     return ""
