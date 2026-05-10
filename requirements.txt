@@ -51,9 +51,4 @@ redis==5.2.1
 # Memory monitoring (optional but recommended)
 psutil>=5.9.0
 
-# sentence-transformers: local embeddings (all-MiniLM-L6-v2, 384 dims)
-sentence-transformers>=2.7.0
-# torch is required by sentence-transformers (CPU version — no GPU needed)
-torch>=2.0.0
-
 PyPDF2>=3.0.0

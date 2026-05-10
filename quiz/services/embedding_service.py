@@ -1,13 +1,11 @@
 """
-Embedding service for QuizSense using sentence-transformers.
-Model: all-MiniLM-L6-v2 (384 dimensions) — tiny, fast, low RAM, runs locally.
+Embedding service for QuizSense using DeepInfra API.
+Model: sentence-transformers/all-MiniLM-L6-v2 (384 dimensions) via API.
 
-RAM optimization for Hetzner CX22 (4GB):
-- LRU eviction: model is loaded on-demand and evicted after IDLE_TIMEOUT seconds
-  of inactivity to avoid holding ~500MB permanently per Gunicorn worker.
-- Small batch encoding (8 chunks/batch) with explicit garbage collection between
-  batches to keep peak memory bounded.
-- torch CPU threads capped at 2 to avoid saturating the 2-vCPU box.
+RAM optimization:
+- Offloads embedding generation to DeepInfra API, removing ~500MB local model footprint.
+- Caches embeddings in Redis/in-memory to avoid redundant API calls.
+- Batches requests for efficiency.
 """
 
 import gc
@@ -15,142 +13,22 @@ import hashlib
 import logging
 import threading
 import time
-from functools import lru_cache
-from pathlib import Path
 
+import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-# Lazy-load the model; unload after IDLE_TIMEOUT seconds of inactivity.
-_transformer_model = None
-_model_lock = threading.RLock()
-_last_used = [0.0]  # mutable container for last-use timestamp
-
 # ─── Embedding cache ──────────────────────────────────────────────────────────
-# Uses Django's Redis cache backend for cross-process sharing and persistence
-# across worker restarts. Falls back to in-memory if Redis is unavailable.
-# Avoids re-embedding identical chunks across files or re-uploads.
 _embedding_cache: dict[str, list] = {}
 _embedding_cache_lock = threading.Lock()
-MAX_CACHE_SIZE = 2000             # fallback in-memory cache size
+MAX_CACHE_SIZE = 2000
 
+# ─── Tunables ───────────────────────────────────────────────────────────────
+BATCH_SIZE = 16
+DEEPINFRA_EMBEDDING_URL = "https://api.deepinfra.com/v1/openai/embeddings"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# ─── Tunables (can be overridden via settings or environment) ───────────────
-IDLE_TIMEOUT_SECONDS = 120        # unload model after 2 min of no encoding activity
-BATCH_SIZE = 16                   # chunks per encode() call — faster on modern CPUs
-MAX_CPU_THREADS = 2                # match Hetzner CX22 vCPU count (2 cores)
-
-
-def _touch():
-    """Update last-use timestamp."""
-    _last_used[0] = time.monotonic()
-
-
-def _idle_seconds():
-    return time.monotonic() - _last_used[0]
-
-
-# ─── Model loading / eviction ───────────────────────────────────────────────
-
-def _get_model():
-    """
-    Load (or return cached) the sentence-transformer model.
-
-    After IDLE_TIMEOUT_SECONDS of inactivity the model is dropped so its
-    ~500MB are reclaimed by the garbage collector.  This prevents the model
-    from living forever in each Gunicorn worker process.
-    """
-    global _transformer_model
-
-    with _model_lock:
-        if _transformer_model is not None:
-            if _idle_seconds() > IDLE_TIMEOUT_SECONDS:
-                logger.info(
-                    "Embedding model idle for %.0f s — evicting to free RAM.",
-                    _idle_seconds(),
-                )
-                del _transformer_model
-                _transformer_model = None
-                gc.collect()
-            else:
-                _touch()
-                return _transformer_model
-
-        import os
-        import torch
-        from sentence_transformers import SentenceTransformer
-
-        torch.set_num_threads(MAX_CPU_THREADS)
-
-        # Read HF token from environment for authenticated HuggingFace requests
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-        if hf_token:
-            logger.info("HF_TOKEN found — using authenticated HuggingFace requests.")
-        else:
-            logger.warning("HF_TOKEN not found — using unauthenticated HuggingFace requests.")
-
-        model = SentenceTransformer(
-            "all-MiniLM-L6-v2",
-            token=hf_token,
-        )
-
-        try:
-            # Dynamic int8 quantization shrinks the model ~40% with negligible
-            # accuracy loss and improves CPU throughput.
-            _transformer_model = torch.quantization.quantize_dynamic(
-                model, {torch.nn.Linear}, dtype=torch.qint8
-            )
-            logger.info(
-                "sentence-transformers model loaded (int8 quantized, %.0f s idle timeout)",
-                IDLE_TIMEOUT_SECONDS,
-            )
-        except Exception as e:
-            logger.warning("Quantization failed, using standard model: %s", e)
-            _transformer_model = model
-
-        _touch()
-        return _transformer_model
-
-
-def _maybe_unload(force: bool = False):
-    """
-    Evict the embedding model to free RAM.
-
-    * force=True  – unload immediately (used by pipeline after a task finishes).
-    * force=False – only unload if idle for longer than IDLE_TIMEOUT_SECONDS.
-    """
-    global _transformer_model
-
-    should_unload = force or (_idle_seconds() > IDLE_TIMEOUT_SECONDS)
-    if not should_unload:
-        return
-
-    with _model_lock:
-        # Re-check inside the lock in case another thread changed state.
-        should_unload = force or (_idle_seconds() > IDLE_TIMEOUT_SECONDS)
-        if _transformer_model is not None and should_unload:
-            if force:
-                logger.info("Embedding model force-unloaded to free RAM.")
-            else:
-                logger.info("Embedding model idle — evicting to free RAM.")
-            del _transformer_model
-            _transformer_model = None
-            gc.collect()
-            # malloc_trim is Linux-only; skip on Windows.
-            import sys
-            if sys.platform.startswith("linux"):
-                try:
-                    import ctypes.util, ctypes
-                    libc_name = ctypes.util.find_library("c")
-                    if libc_name:
-                        libc = ctypes.CDLL(libc_name)
-                        libc.malloc_trim(0)
-                except Exception:
-                    pass
-
-
-# ─── Cache helpers ───────────────────────────────────────────────────────────
 
 def _get_cache_key(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
@@ -188,11 +66,33 @@ def _set_cached_embedding(text: str, embedding: list) -> None:
         _embedding_cache[key] = embedding
 
 
-# ─── Public API ──────────────────────────────────────────────────────────────
+def _call_api_batch(texts: list[str]) -> list[list[float]]:
+    """Call DeepInfra embedding API for a batch of texts."""
+    api_key = getattr(settings, 'AI_PROVIDER_API_KEY', '')
+    if not api_key:
+        raise ValueError("AI_PROVIDER_API_KEY not set for embeddings")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": EMBEDDING_MODEL,
+        "input": texts,
+    }
+
+    response = requests.post(DEEPINFRA_EMBEDDING_URL, headers=headers, json=payload, timeout=60)
+    response.raise_for_status()
+    data = response.json()
+
+    # Sort by index to ensure order matches input
+    embeddings = sorted(data["data"], key=lambda x: x["index"])
+    return [item["embedding"] for item in embeddings]
+
 
 def embed_texts_batched(texts, batch_size=None):
     """
-    Generate embeddings in batches — useful for large textbook ingestion.
+    Generate embeddings in batches via DeepInfra API.
     Returns list of 384-dim float lists.
     """
     if not texts:
@@ -216,18 +116,17 @@ def embed_texts_batched(texts, batch_size=None):
     if not missing_texts:
         return results
 
-    model = _get_model()
-    _touch()
-
+    # Process missing texts in batches via API
     for i in range(0, len(missing_texts), batch_size):
         batch = missing_texts[i : i + batch_size]
-        vectors = model.encode(batch, normalize_embeddings=True)
-        for idx_in_batch, v in enumerate(vectors):
-            embedding = v.tolist()
-            original_idx = missing_indices[i + idx_in_batch]
-            results[original_idx] = embedding
-            _set_cached_embedding(missing_texts[i + idx_in_batch], embedding)
-        del vectors
+        try:
+            vectors = _call_api_batch(batch)
+            for idx_in_batch, embedding in enumerate(vectors):
+                original_idx = missing_indices[i + idx_in_batch]
+                results[original_idx] = embedding
+                _set_cached_embedding(missing_texts[i + idx_in_batch], embedding)
+        except Exception as e:
+            logger.error("DeepInfra embedding API call failed: %s", e)
+            raise ValueError(f"Embedding generation failed: {e}")
 
-    _maybe_unload()
     return results
