@@ -165,7 +165,7 @@ class ModelProvider(AIProvider):
     ) -> str:
         prompt = (
             "You are an expert programming instructor. Based on the context below, "
-            "write a polished, richly-formatted study summary in 180-260 words.\n\n"
+            "write a polished, richly-formatted study summary.\n\n"
             f"Chapter: {chapter_title}\n\n"
             f"Context:\n{text[:12000]}\n\n"
             f"Cross-Reference Notes:\n{cross_reference_notes or 'N/A'}\n\n"
@@ -250,7 +250,7 @@ class ModelProvider(AIProvider):
         wrong_summary = "\n".join(wrong_lines) or "  (all correct!)"
 
         prompt = (
-            f"You are an expert programming instructor. Provide 3-4 concise, actionable study recommendations "
+            f"You are an expert programming instructor. Provide concise, actionable study recommendations "
             f"for a student who scored {quiz_attempt.score}/{quiz_attempt.total_questions} on \"{chapter_title}\".\n\n"
             f"--- All Questions ---\n{topic_summary}\n\n"
             f"--- Incorrect Answers ---\n{wrong_summary}\n\n"
