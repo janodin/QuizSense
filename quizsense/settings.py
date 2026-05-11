@@ -44,6 +44,9 @@ if render_external_hostname:
 if not ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["127.0.0.1", "localhost", "0.0.0.0"]
 
+# Allow nip.io wildcard for temporary public URLs
+ALLOWED_HOSTS.append(".nip.io")
+
 
 # Application definition
 
