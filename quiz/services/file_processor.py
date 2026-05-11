@@ -278,7 +278,7 @@ def _ocr_image_bytes_ai_vision(image_bytes, label):
         )
 
         models = [
-            "Qwen/Qwen2.5-VL-72B-Instruct",
+            "Qwen/Qwen3-VL-30B-A3B-Instruct",
             "meta-llama/Llama-3.2-90B-Vision-Instruct",
         ]
 

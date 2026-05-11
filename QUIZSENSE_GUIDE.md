@@ -109,7 +109,7 @@ The system is designed for **Fundamentals of Programming** with these chapters:
 | **AI Language Model** | DeepInfra openai/gpt-oss-120B | Summary, quiz, and recommendation generation |
 | **PDF Processing** | PyMuPDF (fitz) | Text extraction from PDFs |
 | **Word Processing** | python-docx | Text extraction from DOCX files |
-| **OCR** | DeepInfra Vision API (Qwen2.5-VL-72B primary, Llama-3.2-90B-Vision fallback) | Cloud-based OCR for scanned PDFs (up to 100 pages) and image-only DOCX files |
+| **OCR** | DeepInfra Vision API (Qwen3-VL-30B-A3B-Instruct primary, Llama-3.2-90B-Vision fallback) | Cloud-based OCR for scanned PDFs (up to 100 pages) and image-only DOCX files |
 | **Web Server** | Gunicorn + Nginx | Production deployment |
 | **Frontend** | Bootstrap 5.3.3, Chart.js, DOMPurify | UI, data visualization, and XSS protection |
 | **Security** | GZipMiddleware, Rate Limiting, System Prompts | Compression, abuse prevention, token optimization |
@@ -452,7 +452,7 @@ QuizSense uses **session-based ownership** (no login required):
 - 10MB per file limit (max 10 files)
 - PyMuPDF for direct PDF text extraction (page-by-page with OCR fallback)
 - python-docx for Word document extraction (paragraphs, tables, headers/footers, raw XML)
-- DeepInfra Vision OCR for scanned PDFs (up to 100 pages, primary: Qwen2.5-VL-72B, fallback: Llama-3.2-90B-Vision)
+- DeepInfra Vision OCR for scanned PDFs (up to 100 pages, primary: Qwen3-VL-30B-A3B-Instruct, fallback: Llama-3.2-90B-Vision)
 - DOCX image OCR: extracts embedded `word/media/` images when no text found
 - Per-page text threshold: pages with <50 chars trigger OCR fallback
 - Improved OCR prompt with table/code preservation and structure recovery
@@ -680,14 +680,14 @@ scp root@178.104.226.86:/opt/quizsense/.env /tmp/.env.backup && scp .env root@17
 
 **A:** The system uses DeepInfra's API for all AI operations:
 - **Text Generation**: openai/gpt-oss-120B (120B parameter model) for summaries, quizzes, and recommendations
-- **Vision OCR**: Qwen2.5-VL-72B-Instruct (primary), Llama-3.2-90B-Vision-Instruct (fallback) for scanned PDF and image-only DOCX processing
+- **Vision OCR**: Qwen3-VL-30B-A3B-Instruct (primary), Llama-3.2-90B-Vision-Instruct (fallback) for scanned PDF and image-only DOCX processing
 - **Embeddings**: sentence-transformers/all-MiniLM-L6-v2 via API for text-to-vector conversion
 
 All processing is cloud-based — no local GPU or heavy model dependencies required.
 
 ### Q: How does the system handle scanned PDFs?
 
-**A:** The system first attempts direct text extraction using PyMuPDF page-by-page. If a page has fewer than 50 characters, it triggers AI Vision OCR fallback for just that page. For fully scanned PDFs, it uses DeepInfra's Vision API — starting with Qwen2.5-VL-72B-Instruct (best OCR quality) and falling back to Llama-3.2-90B-Vision-Instruct if the primary fails. The OCR process supports up to 100 pages. No local OCR installation is required.
+**A:** The system first attempts direct text extraction using PyMuPDF page-by-page. If a page has fewer than 50 characters, it triggers AI Vision OCR fallback for just that page. For fully scanned PDFs, it uses DeepInfra's Vision API — starting with Qwen3-VL-30B-A3B-Instruct (efficient MoE vision model) and falling back to Llama-3.2-90B-Vision-Instruct if the primary fails. The OCR process supports up to 100 pages. No local OCR installation is required.
 
 ### Q: How does the system handle image-only Word documents?
 
