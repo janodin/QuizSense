@@ -1248,11 +1248,9 @@ def generate_recommendations_for_attempt(attempt_id: int) -> GenerationResult:
 
 
 def queue_recommendations_generation(attempt_id: int) -> None:
-    # Prevent duplicate queuing if recommendations already exist or are being generated
+    # Prevent duplicate queuing if recommendations already completed
     attempt = QuizAttempt.objects.only("recommendation_status", "ai_recommendation").get(id=attempt_id)
     if attempt.recommendation_status == QuizAttempt.RECOMMENDATION_COMPLETED and attempt.ai_recommendation:
-        return
-    if attempt.recommendation_status == QuizAttempt.RECOMMENDATION_PROCESSING:
         return
 
     def dispatch():
