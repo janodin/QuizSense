@@ -989,7 +989,8 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
                 finally:
                     file.file.close()
 
-                file.extracted_text = extracted_text
+                # Sanitize NUL characters (PostgreSQL cannot store them in text fields)
+                file.extracted_text = extracted_text.replace("\x00", "") if extracted_text else ""
                 # Long OCR/API calls can leave PostgreSQL connections stale.
                 close_old_connections()
                 file.save(update_fields=["extracted_text"])
