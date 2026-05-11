@@ -35,7 +35,7 @@ class MultiFileUploadForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['chapter'].queryset = Chapter.objects.all()
+        self.fields['chapter'].queryset = Chapter.objects.all().order_by('number')
 
     def clean_files(self):
         files = self.files.getlist('files')
