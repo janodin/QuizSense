@@ -1204,6 +1204,24 @@ def _generate_quiz_thread(upload_session_id: int) -> None:
 
 def generate_recommendations_for_attempt(attempt_id: int) -> GenerationResult:
     attempt = QuizAttempt.objects.select_related("quiz", "quiz__chapter").get(id=attempt_id)
+
+    # Early exit if already completed
+    if attempt.recommendation_status == QuizAttempt.RECOMMENDATION_COMPLETED and attempt.ai_recommendation:
+        return GenerationResult(
+            success=True,
+            data=attempt.ai_recommendation,
+            generation_type=GenerationType.RECOMMENDATIONS,
+            provider_name='existing',
+        )
+
+    # Early exit if already processing (another task is handling it)
+    if attempt.recommendation_status == QuizAttempt.RECOMMENDATION_PROCESSING:
+        return GenerationResult(
+            success=False,
+            error="Recommendations already being generated",
+            generation_type=GenerationType.RECOMMENDATIONS,
+        )
+
     attempt.recommendation_status = QuizAttempt.RECOMMENDATION_PROCESSING
     attempt.recommendation_error = ""
     attempt.save(update_fields=["recommendation_status", "recommendation_error"])
@@ -1230,6 +1248,13 @@ def generate_recommendations_for_attempt(attempt_id: int) -> GenerationResult:
 
 
 def queue_recommendations_generation(attempt_id: int) -> None:
+    # Prevent duplicate queuing if recommendations already exist or are being generated
+    attempt = QuizAttempt.objects.only("recommendation_status", "ai_recommendation").get(id=attempt_id)
+    if attempt.recommendation_status == QuizAttempt.RECOMMENDATION_COMPLETED and attempt.ai_recommendation:
+        return
+    if attempt.recommendation_status == QuizAttempt.RECOMMENDATION_PROCESSING:
+        return
+
     def dispatch():
         try:
             from ..tasks import generate_recommendations_task
