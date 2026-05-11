@@ -325,7 +325,7 @@ def submit_quiz(request, quiz_id):
             quiz=quiz,
             session_key=request.session.session_key or '',
             total_questions=len(questions),
-            recommendation_status=QuizAttempt.RECOMMENDATION_PROCESSING,
+            recommendation_status=QuizAttempt.RECOMMENDATION_PENDING,
         )
 
         score = 0

@@ -110,6 +110,21 @@ def generate_recommendations_task(self, attempt_id):
             result.success,
             result.duration_ms,
         )
+        if not result.success:
+            logger.warning(
+                "Recommendations for attempt %s failed: %s",
+                attempt_id,
+                result.error,
+            )
+            try:
+                close_old_connections()
+                attempt = QuizAttempt.objects.get(id=attempt_id)
+                if attempt.recommendation_status != QuizAttempt.RECOMMENDATION_COMPLETED:
+                    attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
+                    attempt.recommendation_error = (result.error or "Recommendations generation failed")[:500]
+                    attempt.save(update_fields=["recommendation_status", "recommendation_error"])
+            except Exception as inner_exc:
+                logger.error("Failed to update recommendation FAILED status for attempt %s: %s", attempt_id, inner_exc)
     except Exception as exc:
         logger.error(
             "Recommendations failed for attempt %s: %s",
