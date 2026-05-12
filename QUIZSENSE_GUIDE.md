@@ -147,14 +147,14 @@ Summary page (/summary/<session_id>/)
     │       (Detailed step timing logged separately: extracting, chunking, summarizing)
     │
     ├── When completed, displays:
-    │   ├── AI-generated study summary (formatted HTML)
+    │   ├── AI-generated study summary (formatted Markdown/HTML)
     │   ├── Text quality indicators (word count, character count, chunk count)
-    │   └── "Generate Quiz" button
+    │   └── "Generate Quiz" button (quiz is also auto-generated in background)
     │
-    └── Click "Generate Quiz"
+    └── Click "Generate Quiz" (or wait for auto-generation)
          │
          ▼
-    System queues quiz generation task
+    System queues quiz generation task (if not already queued)
     User is redirected to Quiz Waiting page
 ```
 
@@ -223,12 +223,13 @@ Review page (/review/<attempt_id>/)
 ### File Upload Processing
 
 ```
-process_upload_session(session_id)
+process_upload_session_simple(upload_session_id)
     │
     ├── Step 1: TEXT_EXTRACTION
     │   ├── For each uploaded file:
     │   │   ├── PDF → PyMuPDF extracts text page-by-page
-    │   │   │   └── If page has <50 chars → AI Vision OCR fallback for that page
+    │   │   │   ├── If page has <50 chars → PyPDF2 fallback for that page
+    │   │   │   └── If still <50 chars → AI Vision OCR fallback for that page
     │   │   ├── DOCX → python-docx extracts text (paragraphs, tables, headers/footers, raw XML)
     │   │   │   └── If no text found → AI Vision OCR on embedded word/media/ images
     │   │   └── Scanned PDF → DeepInfra Vision OCR (max 100 pages)
@@ -246,21 +247,31 @@ process_upload_session(session_id)
         ├── If cache miss:
         │   ├── Always retrieve RAG context (textbook + uploaded chunks)
         │   ├── For long documents (>15k chars): Use map-reduce summary with RAG context
+        │   │   ├── Skip first 3% of text (title/copyright pages)
+        │   │   ├── Split into 2-4 sections of 12,000 chars each
+        │   │   ├── Extract concepts from each section IN PARALLEL (ThreadPoolExecutor)
+        │   │   ├── Synthesize all concepts into final summary
+        │   │   └── If synthesis fails → retry with truncated context → fallback to concept summary
         │   ├── For short documents:
         │   │   ├── Use RAG context directly for single-pass summary
         │   │   └── Send context + prompt to AI provider
-        │   ├── Receive and validate HTML summary
-        │   ├── If reduce synthesis fails → retry with fallback strategy
-        │   ├── Cache result in Redis
+        │   ├── Receive and validate Markdown summary
+        │   ├── Cache result in Redis (7-day TTL)
         │   └── Save summary to UploadSession
+        │
+        └── After summary completes:
+            └── Auto-queue quiz generation (queue_quiz_generation)
 ```
 
 ### Quiz Generation
 
 ```
-generate_quiz(session_id)
+_process_quiz_for_session(upload_session)
     │
-    ├── Create Quiz record (status: pending)
+    ├── Create or lock existing Quiz record (select_for_update to prevent race conditions)
+    │
+    ├── Check Redis cache FIRST (cache key based on content hash + chapter)
+    │   └── If cache hit: return cached quiz data (skip AI call)
     │
     ├── Retrieve context via RAG:
     │   ├── Embed uploaded content via DeepInfra API
@@ -270,31 +281,44 @@ generate_quiz(session_id)
     │
     ├── Send context + quiz prompt to AI provider:
     │   └── "Generate 10 MCQ questions in JSON format..."
+    │   └── max_tokens=4096 (smaller than summary since JSON is compact)
     │
     ├── Validate JSON output:
     │   ├── Must have: question, choices (a-d), correct_answer, topic
     │   ├── Must have exactly 10 questions
     │   └── If malformed → JSON repair fallback attempts to fix
     │
+    ├── Validate each question (text length, choices, answer, topic)
     ├── Bulk create Question records
     ├── Link questions to Quiz (M2M relationship)
     ├── Update Quiz status to "completed"
-    └── Record generation metrics (duration, provider, success)
+    ├── Cache result in Redis (7-day TTL)
+    └── Record generation metrics (duration, provider, success, cache_hit)
 ```
 
 ### Recommendation Generation
 
 ```
-generate_recommendations(attempt_id)
+_process_recommendations_for_attempt(attempt)
     │
-    ├── Collect wrong answers from QuizAttempt
-    │   └── Group by topic
+    ├── Check if already completed → return existing recommendation
+    │
+    ├── Set status to "processing"
+    │
+    ├── Check Redis cache FIRST (cache key based on answer signature)
+    │   └── If cache hit: return cached recommendation
+    │
+    ├── Collect all answers from QuizAttempt
+    │   └── Group by topic, identify wrong answers
     │
     ├── Send wrong topics + context to AI provider:
     │   └── "Generate personalized study recommendations..."
+    │   └── max_tokens=8192, timeout=90s
     │
-    ├── Cache result in Redis
+    ├── Validate output (must be >50 chars)
+    ├── Cache result in Redis (7-day TTL)
     ├── Save recommendation to QuizAttempt
+    ├── Set status to "completed"
     └── Record generation metrics
 ```
 
@@ -363,13 +387,15 @@ generate_recommendations(attempt_id)
 
 ### Cache-First Architecture
 
-QuizSense implements a cache-first approach for RAG retrieval:
+QuizSense implements a cache-first approach for RAG retrieval and AI generation:
 1. **Check Cache First**: Before any expensive embedding or similarity computation, the system checks Redis for a cached result
 2. **Cache Key**: Based on content hash and chapter ID — identical content returns cached results instantly
-3. **Cache Hit**: Returns cached summary in milliseconds, skipping RAG entirely
+3. **Cache Hit**: Returns cached summary/quiz/recommendation in milliseconds, skipping RAG and AI generation entirely
 4. **Cache Miss**: Only then performs embedding generation, similarity scoring, and AI generation
-5. **Cache TTL**: 7 days for summary cache, automatic invalidation on content changes
+5. **Cache TTL**: 7 days for summary, quiz, and recommendation caches
 6. **Map-Reduce for Long Docs**: Documents >15k chars use map-reduce summary with RAG context — embedding API call is still made to retrieve textbook knowledge
+7. **Quiz Caching**: Quiz results cached based on content hash + chapter title (7-day TTL)
+8. **Recommendation Caching**: Recommendations cached based on answer signature (7-day TTL)
 
 This optimization saves 200-500ms per request on cache hits and significantly reduces database and AI API load. RAG context is always included to ground summaries in textbook knowledge.
 
@@ -384,17 +410,23 @@ This optimization saves 200-500ms per request on cache hits and significantly re
 
 - **API-Based Embeddings**: No local PyTorch model — saves ~500MB RAM per worker
 - **Cache-First RAG**: Cache check runs BEFORE retrieval — saves 200-500ms on cache hits
-- **Always-On RAG**: RAG retrieval runs for all documents — long docs use map-reduce with RAG context, short docs use single-pass with RAG context
+- **Always-On RAG**: RAG retrieval runs for ALL documents — long docs use map-reduce with RAG context, short docs use single-pass with RAG context
 - **Redis Cache**: Embeddings are cached in Redis (178,000x speedup vs. recomputing)
-- **Lazy Loading**: Model loads only when needed, evicts after 120s idle
+- **Lazy Provider Initialization**: AI provider singleton created on first use (`get_generation_provider()`)
 - **Batched Encoding**: Multiple texts encoded together for efficiency
 - **Database Indexes**: 20+ indexes on frequently queried fields for faster retrieval
 - **Aggregated Queries**: Database-level aggregation instead of Python loops for analytics
 - **Topic-Aware Filtering**: Textbook chunks filtered by chapter/topic before scoring
 - **JSON Repair Fallback**: Malformed AI quiz responses are auto-repaired instead of failing
-- **Retry/Fallback Summaries**: If reduce synthesis fails, retry with alternative strategy
+- **Retry/Fallback Summaries**: If reduce synthesis fails, retry with truncated context, then concept-based fallback
+- **AI Provider Retry Mechanism**: Automatic retries (default 2) with exponential backoff (10s → 30s → 60s)
+- **Model Fallback**: If primary model (120B) exhausts retries, automatically falls back to smaller 8B model
+- **Configurable Timeouts**: Per-operation timeouts (summary=180s, quiz=120s, recommendations=90s)
+- **Celery Thread Fallback**: When Celery is unavailable, pipeline falls back to background daemon threads
 - **DB Connection Management**: `close_old_connections()` before saves; Celery tasks close connections in `finally` blocks
-- **Raised Token Limits**: `max_tokens=8192` default removes artificial output caps for natural-length summaries
+- **Race Condition Prevention**: `select_for_update()` on quiz records to prevent duplicate generation
+- **Auto-Quiz Generation**: Quiz is automatically queued after summary completes
+- **Memory Monitoring**: RSS memory logged at pipeline steps; Celery workers restart at 512MB RSS limit
 
 ---
 
@@ -405,20 +437,26 @@ This optimization saves 200-500ms per request on cache hits and significantly re
 ```
 Chapter (1) ──────< Topic (M:1)
    │                    │
-   │                    └──< Question (M:1)
-   │                    └──< TextbookChunk (M:1)
+   │                    ├──< Question (M:1)
+   │                    ├──< TextbookChunk (M:1)
+   │                    └──< UploadedChunk (M:1)
    │
    ├──< UploadedFile (M:1)
    ├──< UploadSession (M:1) ──< UploadedChunk (M:1)
-   │              │
+   │              │                │
+   │              │                └──> UploadedFile (M:1)
    │              ├──< RetrievalLog (M:1)
    │              └──< GenerationMetric (M:1)
    │
    └──< Quiz (M:1) ──< Question (M:N via M2M)
-              │
-              └──< QuizAttempt (M:1) ──< QuizAnswer (M:1)
-                        │
-                        └──< GenerationMetric (M:1)
+              │           │
+              │           └──> UploadedFile (M:1)
+              ├──> UploadSession (M:1)
+              └──> UploadedFile (M:1)
+                     └──< QuizAttempt (M:1) ──< QuizAnswer (M:1)
+                                   │                   │
+                                   │                   └──> Question (M:1)
+                                   └──< GenerationMetric (M:1)
 ```
 
 ### Model Descriptions
@@ -427,16 +465,16 @@ Chapter (1) ──────< Topic (M:1)
 |-------|---------|-----------|
 | **Chapter** | Course chapters | number, title |
 | **Topic** | Sub-topics within chapters | chapter (FK), title |
-| **UploadedFile** | User-uploaded files | file, file_type, extracted_text, summary |
-| **UploadSession** | Groups files + processing state | chapter (FK), session_key, summary, processing_status |
-| **UploadedChunk** | Chunks from user uploads | upload_session (FK), content, embedding (JSON) |
-| **TextbookChunk** | Pre-seeded textbook content | chapter (FK), topic (FK), content, embedding (JSON) |
-| **Question** | MCQ questions | text, choice_a-d, correct_answer, chapter (FK), topic (FK) |
-| **Quiz** | Generated quiz sessions | chapter (FK), questions (M2M), status |
-| **QuizAttempt** | User's quiz attempt | quiz (FK), session_key, score, ai_recommendation |
+| **UploadedFile** | User-uploaded files | file, file_type, extracted_text, upload_session (FK), chapter (FK) |
+| **UploadSession** | Groups files + processing state | chapter (FK), session_key, summary, processing_status, processing_started_at, processing_completed_at |
+| **UploadedChunk** | Chunks from user uploads | upload_session (FK), uploaded_file (FK), chapter (FK), content, embedding (JSON), chunk_index |
+| **TextbookChunk** | Pre-seeded textbook content | chapter (FK), topic (FK), content, embedding (JSON), source_title, source_hash, embedding_version |
+| **Question** | MCQ questions | text, choice_a-d, correct_answer, chapter (FK), topic (FK), uploaded_file (FK) |
+| **Quiz** | Generated quiz sessions | chapter (FK), upload_session (FK), uploaded_file (FK), questions (M2M), status, error_message, generated_at |
+| **QuizAttempt** | User's quiz attempt | quiz (FK), session_key, score, total_questions, ai_recommendation, recommendation_status, recommendation_error |
 | **QuizAnswer** | Individual answers | attempt (FK), question (FK), selected_answer, is_correct |
-| **RetrievalLog** | RAG retrieval telemetry | upload_session (FK), query_text, mode, retrieved_chunks |
-| **GenerationMetric** | AI generation telemetry | generation_type, provider, success, duration_ms |
+| **RetrievalLog** | RAG retrieval telemetry | upload_session (FK), query_text, mode, retrieved_chunks, session_chunk_count, textbook_chunk_count, avg/min/max_similarity_top_k, retrieval_latency_ms |
+| **GenerationMetric** | AI generation telemetry | generation_type, provider, success, duration_ms, cache_hit, output_validated, output_length, related_session (FK), related_attempt (FK) |
 
 ### Ownership Model
 
@@ -451,22 +489,25 @@ QuizSense uses **session-based ownership** (no login required):
 
 ### File Processing
 - Multi-file upload (PDF and DOCX)
-- 10MB per file limit (max 10 files)
-- PyMuPDF for direct PDF text extraction (page-by-page with OCR fallback)
+- 10MB per file limit (max 10 files, configurable via DATA_UPLOAD_MAX_MEMORY_SIZE)
+- PyMuPDF for direct PDF text extraction (page-by-page with PyPDF2 fallback, then OCR fallback)
 - python-docx for Word document extraction (paragraphs, tables, headers/footers, raw XML)
 - DeepInfra Vision OCR for scanned PDFs (up to 100 pages, primary: Qwen3-VL-30B-A3B-Instruct, fallback: Llama-3.2-90B-Vision)
 - DOCX image OCR: extracts embedded `word/media/` images when no text found
-- Per-page text threshold: pages with <50 chars trigger OCR fallback
+- Per-page text threshold: pages with <50 chars trigger PyPDF2 fallback, then OCR fallback
 - Improved OCR prompt with table/code preservation and structure recovery
 
 ### AI Generation
-- Study summary from uploaded content (map-reduce for long docs, RAG for short docs)
+- Study summary from uploaded content (map-reduce for long docs with parallel concept extraction, single-pass for short docs, both with RAG)
 - 10-question multiple-choice quiz with JSON repair fallback
 - Personalized topic recommendations after quiz
-- Powered by DeepInfra openai/gpt-oss-120B
-- System prompts for better instruction adherence and token optimization
-- `max_tokens=8192` for natural-length outputs
+- Powered by DeepInfra openai/gpt-oss-120B (primary) with meta-llama/Meta-Llama-3.1-8B-Instruct fallback
+- Automatic retry (default 2 attempts) with exponential backoff (10s → 30s → 60s)
+- Per-operation timeouts: summary=180s, quiz=120s, recommendations=90s
+- `max_tokens=8192` for summaries and recommendations, `max_tokens=4096` for quiz JSON
 - No hardcoded word count limits — summaries scale with content
+- Celery thread fallback when Celery worker is unavailable
+- Auto-quiz generation after summary completes
 
 ### Quiz System
 - Interactive quiz UI with progress indicator
@@ -475,21 +516,29 @@ QuizSense uses **session-based ownership** (no login required):
 - Instant score calculation
 - Answer review with correct/incorrect highlighting
 - Duplicate submission prevention
+- Auto-generated after summary completes (no manual trigger needed)
+- Race condition prevention via `select_for_update()` locking
 
 ### Performance
 - Dashboard caching (5-minute TTL) — 95% database reduction
 - Rate-limited polling endpoints (1 req/2s) — prevents abuse
 - GZip compression — 60-80% bandwidth reduction
 - RAG cache-first architecture — saves 200-500ms on cache hits
-- Skip RAG for long documents (>15k chars) — saves embedding API call
+- Always-On RAG — RAG retrieval runs for ALL documents (long and short)
 - Optimized database queries (`.only()`, `.select_related()`)
-- Redis caching for embeddings and AI responses
+- Redis caching for embeddings and AI responses (7-day TTL)
 - Celery background task processing with DB connection cleanup
 - API-based embedding generation (no local PyTorch — saves ~500MB RAM)
 - Cosine similarity retrieval from both uploaded and textbook chunks
 - Database indexes on frequently queried fields
 - JSON repair fallback for malformed AI responses
-- Retry/fallback strategy for summary generation failures
+- Retry/fallback strategy for summary generation (retry with truncated context → concept fallback)
+- AI provider retry with exponential backoff (10s → 30s → 60s)
+- Model fallback (120B → 8B) when primary model exhausts retries
+- Configurable per-operation timeouts via environment variables
+- Celery thread fallback when broker is unavailable
+- Auto-quiz generation after summary completes
+- Memory monitoring and Celery worker recycling at 512MB RSS
 
 ### Security
 - DOMPurify sanitization for AI-generated HTML (XSS protection)
@@ -540,8 +589,10 @@ python manage.py precompute_textbook_embeddings
 # Use run_dev.bat (starts Django + Celery in separate windows)
 # Or manually:
 python manage.py runserver
-celery -A quizsense worker --loglevel=info --pool=threads --concurrency=2 --max-tasks-per-child=10
+celery -A quizsense worker --loglevel=info --pool=solo --max-tasks-per-child=10
 ```
+
+> **Note**: The Celery worker uses `--pool=solo` (single-threaded) by default via `CELERY_WORKER_POOL = 'solo'` in settings. This avoids concurrency issues on low-memory servers. Use `--pool=threads --concurrency=2` for higher throughput if memory allows.
 
 ### Management Commands
 
@@ -552,6 +603,8 @@ celery -A quizsense worker --loglevel=info --pool=threads --concurrency=2 --max-
 | `precompute_textbook_embeddings` | Pre-computes textbook chunk embeddings via API |
 | `evaluate_rag` | Evaluates RAG retrieval quality |
 | `cleanup_metrics` | Cleans up old GenerationMetric records |
+| `prewarm_embeddings` | Placeholder (API-based embeddings — no local model to pre-warm) |
+| `benchmark_embeddings` | Benchmarks DeepInfra embedding API throughput with configurable samples |
 
 ---
 
@@ -633,9 +686,8 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 | `nginx/quizsense.conf` | Nginx configuration with SSL, security headers, and gzip |
 | `systemd/gunicorn.service` | Gunicorn systemd service unit |
 | `systemd/celery.service` | Celery worker systemd service unit |
-| `gunicorn.conf.py` | Memory-optimized Gunicorn configuration |
+| `gunicorn.conf.py` | Memory-optimized Gunicorn configuration (max_requests=100, max_requests_jitter=20) |
 | `.env.example` | Environment variable template for production setup |
-| `DEPLOYMENT_CHECKLIST.md` | Step-by-step production deployment guide |
 
 ### Server Requirements
 
@@ -648,10 +700,10 @@ Internet → Nginx (SSL, reverse proxy) → Gunicorn (1 worker, 4 threads) → D
 
 ```bash
 # Pull latest code and restart services (single-line)
-ssh root@178.104.226.86 "cd /opt/quizsense && git pull && systemctl restart quizsense && systemctl restart celery"
+ssh root@<SERVER_IP> "cd /opt/quizsense && git pull && systemctl restart quizsense && systemctl restart celery"
 
 # Copy .env file to server (backs up existing first)
-scp root@178.104.226.86:/opt/quizsense/.env /tmp/.env.backup && scp .env root@178.104.226.86:/opt/quizsense/.env
+scp root@<SERVER_IP>:/opt/quizsense/.env /tmp/.env.backup && scp .env root@<SERVER_IP>:/opt/quizsense/.env
 ```
 
 ### Production Optimizations
@@ -667,8 +719,13 @@ scp root@178.104.226.86:/opt/quizsense/.env /tmp/.env.backup && scp .env root@17
 - **API-Based Embeddings**: No local PyTorch model — saves ~500MB RAM per worker
 - **DB Connection Cleanup**: `close_old_connections()` before saves; Celery tasks close connections in `finally` blocks
 - **JSON Repair Fallback**: Malformed AI quiz responses auto-repaired
-- **Retry/Fallback Summaries**: Alternative strategy when reduce synthesis fails
-- **Raised Token Limits**: `max_tokens=8192` for natural-length outputs
+- **Retry/Fallback Summaries**: Retry with truncated context, then concept-based fallback
+- **AI Provider Retry**: Automatic retries with exponential backoff (10s → 30s → 60s)
+- **Model Fallback**: Primary 120B model → fallback 8B model on persistent failure
+- **Configurable Timeouts**: Per-operation timeouts via environment variables
+- **Gunicorn Worker Recycling**: `max_requests=100` with `max_requests_jitter=20`
+- **Celery Thread Fallback**: Background threads used when Celery broker is unavailable
+- **Auto-Quiz Generation**: Quiz automatically queued after summary completes
 
 ---
 
@@ -681,11 +738,12 @@ scp root@178.104.226.86:/opt/quizsense/.env /tmp/.env.backup && scp .env root@17
 ### Q: What AI model does the system use?
 
 **A:** The system uses DeepInfra's API for all AI operations:
-- **Text Generation**: openai/gpt-oss-120B (120B parameter model) for summaries, quizzes, and recommendations
+- **Text Generation (Primary)**: openai/gpt-oss-120B (120B parameter model) for summaries, quizzes, and recommendations
+- **Text Generation (Fallback)**: meta-llama/Meta-Llama-3.1-8B-Instruct (8B parameter model) — automatically used when the primary model fails after all retries
 - **Vision OCR**: Qwen3-VL-30B-A3B-Instruct (primary), Llama-3.2-90B-Vision-Instruct (fallback) for scanned PDF and image-only DOCX processing
 - **Embeddings**: sentence-transformers/all-MiniLM-L6-v2 via API for text-to-vector conversion
 
-All processing is cloud-based — no local GPU or heavy model dependencies required.
+All processing is cloud-based — no local GPU or heavy model dependencies required. The system includes automatic retry (default 2 attempts) with exponential backoff (10s → 30s → 60s) before falling back to the smaller model.
 
 ### Q: How does the system handle scanned PDFs?
 
@@ -726,14 +784,15 @@ This ensures that even DOCX files with zero Word text nodes but hundreds of embe
 **A:** Several optimizations are in place:
 
 - **API-Based Embeddings**: No local PyTorch or sentence-transformers — saves ~500MB RAM per worker
-- **Map-Reduce for Long Docs**: Documents >15k chars split into sections for parallel concept extraction, then synthesized with RAG context
-- **Textbook chunk scoring**: Done in paged batches to bound memory
-- **Gunicorn recycles workers**: After a set number of requests
-- **Celery workers**: Have per-child memory limits (`--max-tasks-per-child=10`)
+- **Map-Reduce for Long Docs**: Documents >15k chars split into 2-4 sections (12,000 chars each, skipping first 3%), concepts extracted in parallel via ThreadPoolExecutor (max 4 workers), then synthesized with RAG context. If synthesis fails → retry with 5,000-char truncated context → fallback to concept-based summary
+- **Textbook chunk scoring**: Done in paged batches (200 chunks per DB fetch), session chunks capped at 100, textbook chunks limited to first 500 by ID
+- **Gunicorn recycles workers**: After 100 requests (with ±20 jitter)
+- **Celery workers**: Have per-child memory limits (512MB RSS, max 10 tasks per child)
 - **Redis caching**: Avoids recomputing expensive operations
 - **Database indexes**: Reduce query memory footprint
 - **`.only()` queries**: Fetch only required fields
 - **DB connection cleanup**: `close_old_connections()` before saves; Celery tasks close connections in `finally` blocks
+- **Memory monitoring**: RSS memory logged at pipeline steps
 
 ### Q: What datasets were used?
 
@@ -744,15 +803,19 @@ This ensures that even DOCX files with zero Word text nodes but hundreds of embe
 **A:** Multiple layers of protection:
 
 - **Rate Limiting**: Polling endpoints limited to 1 request per 2 seconds per session
-- **Duplicate Prevention**: Quiz generation checks for existing processing/completed quizzes
+- **Duplicate Prevention**: Quiz generation checks for existing processing/completed quizzes with `select_for_update()` locking
 - **GZip Compression**: Reduces bandwidth usage by 60-80%
 - **Cache-First Architecture**: RAG retrieval skipped on cache hits, saving 200-500ms
 - **System Prompts**: AI provider uses cached system prompts for token cost reduction
 - **DOMPurify**: Client-side sanitization prevents XSS from AI-generated content
 - **Database Indexes**: 20+ indexes optimize query performance and reduce load
 - **JSON Repair Fallback**: Malformed AI quiz responses are auto-repaired instead of failing
-- **Retry/Fallback Summaries**: Alternative strategy when reduce synthesis fails
+- **Retry/Fallback Summaries**: Retry with truncated context, then concept-based fallback
+- **AI Provider Retry**: Automatic retries (default 2) with exponential backoff (10s → 30s → 60s) on timeout, connection error, empty response, or 429/502/503/504 status codes
+- **Model Fallback**: Primary 120B model → fallback 8B model when all retries exhausted
+- **Configurable Timeouts**: Per-operation timeouts (summary=180s, quiz=120s, recommendations=90s)
 - **DB Connection Management**: Prevents "server closed connection" errors with proper cleanup
+- **Celery Thread Fallback**: Background daemon threads used when Celery broker is unavailable
 
 ### Q: What security measures are in place?
 
@@ -775,6 +838,18 @@ This ensures that even DOCX files with zero Word text nodes but hundreds of embe
 - **Database indexes**: Optimized indexes on frequently queried fields
 - **Query reduction**: ~40 queries reduced to ~8 per dashboard load
 - **Vary on cookie**: Cache varies by session to maintain data isolation
+
+### Q: How does the system handle AI provider failures?
+
+**A:** Multiple layers of resilience protect against AI provider failures:
+
+1. **Automatic Retry**: Each AI request is retried up to 2 times (configurable) with exponential backoff (10s → 30s → 60s)
+2. **Model Fallback**: If the primary 120B model exhausts all retries, the system automatically falls back to a smaller 8B model
+3. **Configurable Timeouts**: Different timeouts per operation (summary=180s, quiz=120s, recommendations=90s) to match expected response times
+4. **Celery Retry**: If the entire pipeline fails, Celery retries the task up to 2 times with 30s delay
+5. **Thread Fallback**: When Celery broker is unavailable, background daemon threads handle processing
+6. **Summary Fallback Chain**: If AI synthesis fails → retry with truncated context → fallback to concept-based summary
+7. **JSON Repair**: Malformed quiz JSON is automatically repaired via a second AI call
 
 ---
 
