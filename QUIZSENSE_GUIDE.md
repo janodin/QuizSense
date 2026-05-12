@@ -101,17 +101,18 @@ The system is designed for **Fundamentals of Programming** with these chapters:
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Backend Framework** | Django 6.0.x | Web application framework |
+| **Backend Framework** | Django 5.x | Web application framework |
 | **Task Queue** | Celery 5.4.0 | Background task processing |
 | **Cache & Broker** | Redis 5.2.1 | Caching, task brokering, embedding cache |
 | **Database** | PostgreSQL | Primary data storage |
 | **Embeddings** | DeepInfra API (sentence-transformers/all-MiniLM-L6-v2) | Text-to-vector conversion via API (384 dimensions) |
-| **AI Language Model** | DeepInfra openai/gpt-oss-120B | Summary, quiz, and recommendation generation |
-| **PDF Processing** | PyMuPDF (fitz) | Text extraction from PDFs |
+| **AI Language Model** | DeepInfra openai/gpt-oss-120B (primary), meta-llama/Meta-Llama-3.1-8B-Instruct (fallback) | Summary, quiz, and recommendation generation with automatic retry and model fallback |
+| **PDF Processing** | PyMuPDF (fitz) + PyPDF2 fallback | Text extraction from PDFs |
 | **Word Processing** | python-docx | Text extraction from DOCX files |
 | **OCR** | DeepInfra Vision API (Qwen3-VL-30B-A3B-Instruct primary, Llama-3.2-90B-Vision fallback) | Cloud-based OCR for scanned PDFs (up to 100 pages) and image-only DOCX files |
-| **Web Server** | Gunicorn + Nginx | Production deployment |
+| **Web Server** | Gunicorn + Nginx + WhiteNoise | Production deployment with static file serving |
 | **Frontend** | Bootstrap 5.3.3, Chart.js, DOMPurify | UI, data visualization, and XSS protection |
+| **Forms** | django-crispy-forms + crispy-bootstrap5 | Form rendering |
 | **Security** | GZipMiddleware, Rate Limiting, System Prompts | Compression, abuse prevention, token optimization |
 
 ---
@@ -142,7 +143,8 @@ User visits homepage (/)
 Summary page (/summary/<session_id>/)
     │
     ├── Shows processing status (polling every 3 seconds)
-    │   └── Statuses: pending → extracting → chunking → summarizing → completed/failed
+    │   └── Statuses: pending → processing → completed/failed
+    │       (Detailed step timing logged separately: extracting, chunking, summarizing)
     │
     ├── When completed, displays:
     │   ├── AI-generated study summary (formatted HTML)
@@ -191,11 +193,11 @@ Take Quiz page (/quiz/<quiz_id>/)
 ### Step 5: View Results
 
 ```
-Results page (/results/<quiz_id>/)
+Results page (/results/<attempt_id>/)
     │
     ├── Animated score ring (percentage display)
     │
-    ├── AI recommendation status (polling)
+    ├── AI recommendation status (polling every 3 seconds)
     │   └── When ready: personalized topic recommendations appear
     │
     └── "Review Answers" button → goes to Review page
@@ -204,7 +206,7 @@ Results page (/results/<quiz_id>/)
 ### Step 6: Review Answers
 
 ```
-Review page (/review/<quiz_id>/)
+Review page (/review/<attempt_id>/)
     │
     ├── Shows all 10 questions with:
     │   ├── User's selected answer

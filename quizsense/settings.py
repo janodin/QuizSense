@@ -199,6 +199,17 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 # AI Provider API Key (default: DeepInfra)
 AI_PROVIDER_API_KEY = os.getenv('AI_PROVIDER_API_KEY', '')
 
+# AI Provider model configuration
+AI_PROVIDER_MODEL = os.getenv('AI_PROVIDER_MODEL', 'openai/gpt-oss-120b')
+AI_PROVIDER_FALLBACK_MODEL = os.getenv('AI_PROVIDER_FALLBACK_MODEL', 'meta-llama/Meta-Llama-3.1-8B-Instruct')
+AI_PROVIDER_MAX_RETRIES = int(os.getenv('AI_PROVIDER_MAX_RETRIES', '2'))
+
+# Per-operation timeouts (seconds)
+AI_PROVIDER_TIMEOUT_SUMMARY = int(os.getenv('AI_PROVIDER_TIMEOUT_SUMMARY', '180'))
+AI_PROVIDER_TIMEOUT_QUIZ = int(os.getenv('AI_PROVIDER_TIMEOUT_QUIZ', '120'))
+AI_PROVIDER_TIMEOUT_RECOMMENDATIONS = int(os.getenv('AI_PROVIDER_TIMEOUT_RECOMMENDATIONS', '90'))
+AI_PROVIDER_TIMEOUT_CONCEPTS = int(os.getenv('AI_PROVIDER_TIMEOUT_CONCEPTS', '90'))
+
 # Embeddings / RAG
 EMBEDDING_DIMENSIONS = 384
 

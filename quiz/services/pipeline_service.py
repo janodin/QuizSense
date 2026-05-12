@@ -104,65 +104,102 @@ class AIProvider(ABC):
 class ModelProvider(AIProvider):
     """Uses the configured AI provider API (default: DeepInfra with openai/gpt-oss-120b)."""
     def __init__(self):
+        from django.conf import settings
         self._url = "https://api.deepinfra.com/v1/openai/chat/completions"
-        self._model = "openai/gpt-oss-120b"
+        self._model = getattr(settings, 'AI_PROVIDER_MODEL', 'openai/gpt-oss-120b')
+        self._fallback_model = getattr(settings, 'AI_PROVIDER_FALLBACK_MODEL', 'meta-llama/Meta-Llama-3.1-8B-Instruct')
+        self._max_retries = getattr(settings, 'AI_PROVIDER_MAX_RETRIES', 2)
 
-    def _make_request(self, prompt: str, max_tokens: int = 8192, timeout: int = 120) -> str:
+    def _make_request(self, prompt: str, max_tokens: int = 8192, timeout: int = 180, use_fallback: bool = False) -> str:
         import json
         import time
         import requests
         from django.conf import settings
 
-        start_time = time.time()
-        logger.info("[AI_PROVIDER] Sending request (prompt_length=%d, max_tokens=%d, timeout=%d)", len(prompt), max_tokens, timeout)
+        model = self._fallback_model if use_fallback else self._model
+        max_retries = self._max_retries
+        backoff_sequence = [10, 30, 60]
 
-        headers = {
-            "Authorization": f"Bearer {settings.AI_PROVIDER_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            "max_tokens": max_tokens,
-            "temperature": 0.7,
-        }
+        last_error = None
+        for attempt in range(1 + max_retries):
+            if attempt > 0:
+                delay = backoff_sequence[min(attempt - 1, len(backoff_sequence) - 1)]
+                logger.info("[AI_PROVIDER] Retry %d/%d after %ds backoff (model=%s)", attempt, max_retries, delay, model)
+                time.sleep(delay)
 
-        try:
-            response = requests.post(self._url, headers=headers, json=payload, timeout=timeout)
-            elapsed = time.time() - start_time
-            logger.info("[AI_PROVIDER] Response received in %.1fs (status=%d)", elapsed, response.status_code)
-        except requests.exceptions.Timeout:
-            logger.error("[AI_PROVIDER] Request timed out after %ds", timeout)
-            raise ValueError(f"AI provider request timed out after {timeout} seconds")
-        except requests.exceptions.ConnectionError as e:
-            logger.error("[AI_PROVIDER] Connection error: %s", e)
-            raise ValueError(f"AI provider connection error: {e}")
+            start_time = time.time()
+            logger.info("[AI_PROVIDER] Sending request (attempt %d/%d, prompt_length=%d, max_tokens=%d, timeout=%d, model=%s)",
+                        attempt + 1, 1 + max_retries, len(prompt), max_tokens, timeout, model)
 
-        if response.status_code != 200:
+            headers = {
+                "Authorization": f"Bearer {settings.AI_PROVIDER_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": 0.7,
+            }
+
             try:
-                error_data = response.json()
-                msg = error_data.get("error", {}).get("message") or response.text
-            except Exception:
-                msg = response.text
-            logger.error("[AI_PROVIDER] API error (status=%d): %s", response.status_code, msg)
-            raise ValueError(f"AI provider error ({response.status_code}): {msg}")
+                response = requests.post(self._url, headers=headers, json=payload, timeout=timeout)
+                elapsed = time.time() - start_time
+                logger.info("[AI_PROVIDER] Response received in %.1fs (status=%d, attempt=%d)", elapsed, response.status_code, attempt + 1)
+            except requests.exceptions.Timeout:
+                last_error = f"AI provider request timed out after {timeout} seconds"
+                logger.error("[AI_PROVIDER] %s (attempt %d)", last_error, attempt + 1)
+                continue
+            except requests.exceptions.ConnectionError as e:
+                last_error = f"AI provider connection error: {e}"
+                logger.error("[AI_PROVIDER] %s (attempt %d)", last_error, attempt + 1)
+                continue
 
+            if response.status_code != 200:
+                try:
+                    error_data = response.json()
+                    msg = error_data.get("error", {}).get("message") or response.text
+                except Exception:
+                    msg = response.text
+                last_error = f"AI provider error ({response.status_code}): {msg}"
+                logger.error("[AI_PROVIDER] %s (attempt %d)", last_error, attempt + 1)
+                if response.status_code in {429, 502, 503, 504}:
+                    continue
+                raise ValueError(last_error)
+
+            try:
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                if not content:
+                    last_error = "AI provider returned empty response"
+                    logger.error("[AI_PROVIDER] %s (attempt %d)", last_error, attempt + 1)
+                    continue
+                return content
+            except (KeyError, IndexError, json.JSONDecodeError) as e:
+                last_error = f"AI provider response parsing failed: {e}"
+                logger.error("[AI_PROVIDER] %s (attempt %d)", last_error, attempt + 1)
+                continue
+
+        all_retries_exhausted = f"All {1 + max_retries} attempts failed for model '{model}'. Last error: {last_error}"
+        logger.error("[AI_PROVIDER] %s", all_retries_exhausted)
+        raise ValueError(all_retries_exhausted)
+
+    def _make_request_with_fallback(self, prompt: str, max_tokens: int = 8192, timeout: int = 180) -> str:
+        """Try primary model with retries, then fall back to smaller model."""
         try:
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            if not content:
-                raise ValueError("AI provider returned empty response")
-            return content
-        except (KeyError, IndexError, json.JSONDecodeError) as e:
-            logger.error("[AI_PROVIDER] Failed to parse response: %s", e)
-            raise ValueError(f"AI provider response parsing failed: {e}")
+            return self._make_request(prompt, max_tokens=max_tokens, timeout=timeout, use_fallback=False)
+        except ValueError as primary_error:
+            logger.warning("[AI_PROVIDER] Primary model failed, trying fallback model: %s", primary_error)
+            return self._make_request(prompt, max_tokens=max_tokens, timeout=timeout, use_fallback=True)
 
     def generate_summary(
         self, text: str, chapter_title: str, cross_reference_notes: str
     ) -> str:
+        from django.conf import settings
+        timeout = getattr(settings, 'AI_PROVIDER_TIMEOUT_SUMMARY', 180)
         prompt = (
             "You are an expert programming instructor. Based on the context below, "
             "write a polished, richly-formatted study summary.\n\n"
@@ -185,9 +222,11 @@ class ModelProvider(AIProvider):
             "- **Label**: Another actionable item with `code` keywords.\n\n"
             "Return only the study summary Markdown now:"
         )
-        return self._make_request(prompt)
+        return self._make_request_with_fallback(prompt, timeout=timeout)
 
     def extract_concepts(self, text: str) -> str:
+        from django.conf import settings
+        timeout = getattr(settings, 'AI_PROVIDER_TIMEOUT_CONCEPTS', 90)
         prompt = (
             "You are analyzing a section of a programming textbook. "
             "Read the text carefully and extract the key information.\n\n"
@@ -199,13 +238,16 @@ class ModelProvider(AIProvider):
             "4. Topics covered in this section\n\n"
             "Be thorough but concise. Return as plain text."
         )
-        return self._make_request(prompt)
+        return self._make_request(prompt, timeout=timeout)
 
     def generate_mcq(
         self, text: str, chapter_title: str, cross_reference_notes: str
     ) -> list:
+        from django.conf import settings
         import json
         import re
+
+        timeout = getattr(settings, 'AI_PROVIDER_TIMEOUT_QUIZ', 120)
 
         def _extract_json_array(raw_text: str) -> str:
             cleaned_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL)
@@ -229,7 +271,7 @@ class ModelProvider(AIProvider):
             'Escape quotes inside strings. Do not use markdown. Do not add comments.\n\n'
             'IMPORTANT: Do NOT include any reasoning, thinking, or explanation. Output ONLY the JSON array.'
         )
-        raw = self._make_request(prompt, max_tokens=4096)
+        raw = self._make_request(prompt, max_tokens=4096, timeout=timeout)
 
         try:
             questions = _parse_questions(raw)
@@ -244,13 +286,15 @@ class ModelProvider(AIProvider):
                 "Return ONLY valid JSON. No markdown, no explanation.\n\n"
                 f"Malformed JSON:\n{_extract_json_array(raw)}"
             )
-            repaired = self._make_request(repair_prompt, max_tokens=4096, timeout=90)
+            repaired = self._make_request(repair_prompt, max_tokens=4096, timeout=timeout)
             questions = _parse_questions(repaired)
         return questions[:10]
 
     def generate_recommendations(
         self, quiz_attempt: QuizAttempt, questions_with_answers: list
     ) -> str:
+        from django.conf import settings
+        timeout = getattr(settings, 'AI_PROVIDER_TIMEOUT_RECOMMENDATIONS', 90)
         chapter_title = (
             quiz_attempt.quiz.chapter.title if quiz_attempt.quiz.chapter else "Fundamentals"
         )
@@ -275,7 +319,7 @@ class ModelProvider(AIProvider):
             f"--- Incorrect Answers ---\n{wrong_summary}\n\n"
             f"Focus on the weak topics and explain what the student should study to improve."
         )
-        return self._make_request(prompt, timeout=90)
+        return self._make_request(prompt, timeout=timeout)
 
     def get_provider_name(self) -> str:
         return "deepinfra"
@@ -383,22 +427,13 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
             else:
                 _detail(f"Document is short ({total_len} chars) — using single-pass summary...")
                 _detail("Calling AI provider...")
-                try:
-                    summary_text = provider.generate_summary(combined_text, chapter_title, cross_ref)
-                    result = GenerationResult(
-                        success=True,
-                        data=summary_text,
-                        generation_type=GenerationType.SUMMARY,
-                        provider_name=provider.get_provider_name(),
-                    )
-                except Exception as e:
-                    _detail(f"AI call failed: {e}")
-                    result = GenerationResult(
-                        success=False,
-                        error=str(e),
-                        generation_type=GenerationType.SUMMARY,
-                        provider_name=provider.get_provider_name(),
-                    )
+                summary_text = provider.generate_summary(combined_text, chapter_title, cross_ref)
+                result = GenerationResult(
+                    success=True,
+                    data=summary_text,
+                    generation_type=GenerationType.SUMMARY,
+                    provider_name=provider.get_provider_name(),
+                )
 
             if result and result.success:
                 if _validate_summary(result.data):
@@ -1094,14 +1129,8 @@ def process_upload_session_simple(upload_session_id: int) -> dict:
             ]
         )
         log_memory(f"[SESSION {upload_session_id}] FAILED")
-        # Run GC after large PDF strings/chunks are released.
         gc.collect()
-        return {
-            "summary": GenerationResult(
-                success=False, error=str(exc), generation_type=GenerationType.SUMMARY
-            ),
-            "quiz": None,
-        }
+        raise
 
 
 def queue_upload_session_processing(upload_session_id: int) -> None:

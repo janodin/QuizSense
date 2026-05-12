@@ -316,12 +316,12 @@
                 <i class="bi bi-lightbulb-fill text-warning"></i>
                 <span class="fw-semibold">Study Recommendations</span>
                 <small class="text-muted ms-auto" id="rec-status-label">
-                    {% if attempt.recommendation_status == 'processing' %}Generating...{% else %}Follow these to improve your weak areas{% endif %}
+                    {% if attempt.recommendation_status == 'processing' or attempt.recommendation_status == 'pending' %}Generating...{% else %}Follow these to improve your weak areas{% endif %}
                 </small>
             </div>
             <div class="card-body p-0">
                 <div id="recommendation-body">
-                    {% if attempt.recommendation_status == 'processing' %}
+                    {% if attempt.recommendation_status == 'processing' or attempt.recommendation_status == 'pending' %}
                         <div class="p-4 text-center text-muted">
                             <div class="spinner-border spinner-border-sm text-primary mb-2" role="status"></div>
                             <p class="mb-0">Analyzing your answers and generating personalized recommendations...</p>
@@ -378,7 +378,7 @@
     }
 
     // Poll for recommendations if they're still being generated
-    {% if attempt.recommendation_status == 'processing' %}
+    {% if attempt.recommendation_status == 'processing' or attempt.recommendation_status == 'pending' %}
     (function poll() {
         const attemptId = {{ attempt.id }};
         const pollInterval = 3000; // 3 seconds

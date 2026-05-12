@@ -8,6 +8,7 @@ Run with:
 
 import json
 import re
+from unittest.mock import patch, MagicMock
 
 from django.test import TestCase, RequestFactory, override_settings
 from django.contrib.sessions.middleware import SessionMiddleware
@@ -311,3 +312,235 @@ class QuizScoringTest(TestCase):
         self.assertEqual(attempt.score, 1)
         self.assertEqual(attempt.total_questions, 2)
         self.assertEqual(attempt.score_percentage(), 50)
+
+
+# ---------------------------------------------------------------------------
+# AI Provider fallback tests
+# ---------------------------------------------------------------------------
+
+class AIProviderFallbackTest(TestCase):
+    """Test that the AI provider correctly falls back to a smaller model."""
+
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_fallback_triggered_on_primary_timeout(self, mock_sleep, mock_post):
+        """Primary model times out 3 times, then fallback succeeds."""
+        import requests as real_requests
+
+        call_count = {'value': 0}
+
+        def side_effect(*args, **kwargs):
+            call_count['value'] += 1
+            if call_count['value'] <= 3:
+                raise real_requests.exceptions.Timeout("Connection timed out")
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = {
+                "choices": [{"message": {"content": "Fallback model response"}}]
+            }
+            return response
+
+        mock_post.side_effect = side_effect
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 2
+
+        result = provider._make_request_with_fallback("test prompt")
+        self.assertEqual(result, "Fallback model response")
+        self.assertEqual(call_count['value'], 4)
+
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_fallback_triggered_on_primary_502(self, mock_sleep, mock_post):
+        """Primary model returns 502 errors, fallback succeeds."""
+        call_count = {'value': 0}
+
+        def side_effect(*args, **kwargs):
+            call_count['value'] += 1
+            if call_count['value'] <= 3:
+                response = MagicMock()
+                response.status_code = 502
+                response.text = "Bad Gateway"
+                response.json.side_effect = Exception("No JSON")
+                return response
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = {
+                "choices": [{"message": {"content": "Fallback succeeded"}}]
+            }
+            return response
+
+        mock_post.side_effect = side_effect
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 2
+
+        result = provider._make_request_with_fallback("test prompt")
+        self.assertEqual(result, "Fallback succeeded")
+        self.assertEqual(call_count['value'], 4)
+
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_primary_succeeds_no_fallback(self, mock_sleep, mock_post):
+        """Primary model succeeds on first try, fallback never called."""
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "choices": [{"message": {"content": "Primary model response"}}]
+        }
+        mock_post.return_value = response
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 2
+
+        result = provider._make_request_with_fallback("test prompt")
+        self.assertEqual(result, "Primary model response")
+        self.assertEqual(mock_post.call_count, 1)
+
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_all_attempts_fail_raises_error(self, mock_sleep, mock_post):
+        """Both primary and fallback exhaust all retries."""
+        import requests as real_requests
+
+        def side_effect(*args, **kwargs):
+            raise real_requests.exceptions.Timeout("Always timeout")
+
+        mock_post.side_effect = side_effect
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 1
+
+        with self.assertRaises(ValueError) as ctx:
+            provider._make_request_with_fallback("test prompt")
+
+        self.assertIn("All", str(ctx.exception))
+        self.assertIn("attempts failed", str(ctx.exception))
+
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_retry_on_connection_error(self, mock_sleep, mock_post):
+        """Connection error triggers retry, second attempt succeeds."""
+        import requests as real_requests
+
+        call_count = {'value': 0}
+
+        def side_effect(*args, **kwargs):
+            call_count['value'] += 1
+            if call_count['value'] == 1:
+                raise real_requests.exceptions.ConnectionError("Connection refused")
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = {
+                "choices": [{"message": {"content": "Recovered after connection error"}}]
+            }
+            return response
+
+        mock_post.side_effect = side_effect
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 2
+
+        result = provider._make_request("test prompt")
+        self.assertEqual(result, "Recovered after connection error")
+        self.assertEqual(call_count['value'], 2)
+
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_retry_on_empty_response(self, mock_sleep, mock_post):
+        """Empty content triggers retry, second attempt succeeds."""
+        call_count = {'value': 0}
+
+        def side_effect(*args, **kwargs):
+            call_count['value'] += 1
+            response = MagicMock()
+            response.status_code = 200
+            if call_count['value'] == 1:
+                response.json.return_value = {
+                    "choices": [{"message": {"content": ""}}]
+                }
+            else:
+                response.json.return_value = {
+                    "choices": [{"message": {"content": "Second attempt worked"}}]
+                }
+            return response
+
+        mock_post.side_effect = side_effect
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 2
+
+        result = provider._make_request("test prompt")
+        self.assertEqual(result, "Second attempt worked")
+        self.assertEqual(call_count['value'], 2)
+
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_retry_on_rate_limit_429(self, mock_sleep, mock_post):
+        """Rate limit 429 triggers retry."""
+        call_count = {'value': 0}
+
+        def side_effect(*args, **kwargs):
+            call_count['value'] += 1
+            response = MagicMock()
+            response.status_code = 429 if call_count['value'] == 1 else 200
+            response.json.return_value = {
+                "choices": [{"message": {"content": "After rate limit"}}]
+            }
+            response.text = "Too Many Requests"
+            return response
+
+        mock_post.side_effect = side_effect
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 2
+
+        result = provider._make_request("test prompt")
+        self.assertEqual(result, "After rate limit")
+        self.assertEqual(call_count['value'], 2)
+
+    @override_settings(AI_PROVIDER_MODEL='test/primary-model', AI_PROVIDER_FALLBACK_MODEL='test/fallback-model')
+    @patch('requests.post')
+    @patch('time.sleep')
+    def test_correct_models_used(self, mock_sleep, mock_post):
+        """Verify primary and fallback model names are correct."""
+        import requests as real_requests
+
+        calls = []
+
+        def capture_model(*args, **kwargs):
+            calls.append(kwargs['json']['model'])
+            if len(calls) <= 3:
+                raise real_requests.exceptions.Timeout("timeout")
+            response = MagicMock()
+            response.status_code = 200
+            response.json.return_value = {
+                "choices": [{"message": {"content": "ok"}}]
+            }
+            return response
+
+        mock_post.side_effect = capture_model
+
+        from quiz.services.pipeline_service import ModelProvider
+
+        provider = ModelProvider()
+        provider._max_retries = 2
+
+        result = provider._make_request_with_fallback("test prompt")
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls[:3], ['test/primary-model', 'test/primary-model', 'test/primary-model'])
+        self.assertEqual(calls[3], 'test/fallback-model')
