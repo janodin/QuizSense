@@ -92,9 +92,13 @@ def home(request):
             except Exception as e:
                 import logging
                 logger = logging.getLogger(__name__)
-                logger.exception("Upload session processing failed")
-                upload_session.delete()
-                messages.error(request, "An error occurred during processing. Please try again or contact support.")
+                logger.exception("Upload session processing failed: %s", e)
+                try:
+                    upload_session.delete()
+                except Exception as del_exc:
+                    logger.warning("Failed to clean up upload session %s: %s", upload_session.id, del_exc)
+                error_msg = f"An error occurred during processing: {type(e).__name__}: {str(e)[:200]}"
+                messages.error(request, error_msg)
                 return render(request, 'quiz/home.html', {'form': form})
 
             return redirect('study_summary', upload_session_id=upload_session.id)
@@ -195,10 +199,11 @@ def upload_session_status(request, upload_session_id):
     if not _check_ownership(request, upload_session):
         return HttpResponseForbidden("You do not have access to this upload session.")
 
+    summary_text = upload_session.summary or ''
     return JsonResponse({
         'status': upload_session.processing_status,
         'error': upload_session.processing_error,
-        'summary_ready': bool(upload_session.summary.strip()),
+        'summary_ready': bool(summary_text.strip()),
     })
 
 

@@ -1147,7 +1147,7 @@ def queue_upload_session_processing(upload_session_id: int) -> None:
             worker = threading.Thread(
                 target=_process_upload_session_thread,
                 args=(upload_session_id,),
-                daemon=True,
+                daemon=False,
                 name=f"upload-session-{upload_session_id}",
             )
             worker.start()
@@ -1193,7 +1193,7 @@ def queue_quiz_generation(upload_session_id: int) -> None:
             worker = threading.Thread(
                 target=_generate_quiz_thread,
                 args=(upload_session_id,),
-                daemon=True,
+                daemon=False,
                 name=f"quiz-generation-{upload_session_id}",
             )
             worker.start()
@@ -1295,7 +1295,7 @@ def queue_recommendations_generation(attempt_id: int) -> None:
             worker = threading.Thread(
                 target=_generate_recommendations_thread,
                 args=(attempt_id,),
-                daemon=True,
+                daemon=False,
                 name=f"recommendations-{attempt_id}",
             )
             worker.start()
