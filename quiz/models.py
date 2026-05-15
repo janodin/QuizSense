@@ -50,7 +50,7 @@ class UploadedFile(models.Model):
     ]
     upload_session = models.ForeignKey('UploadSession', on_delete=models.CASCADE, related_name='files', null=True, blank=True)
     chapter = models.ForeignKey(Chapter, on_delete=models.SET_NULL, null=True, blank=True, related_name='uploaded_files')
-    file = models.FileField(upload_to='uploads/')
+    file = models.FileField(upload_to='uploads/', max_length=500)
     file_type = models.CharField(max_length=10, choices=FILE_TYPE_CHOICES)
     extracted_text = models.TextField(blank=True)
     summary = models.TextField(blank=True)

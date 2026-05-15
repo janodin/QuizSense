@@ -48,6 +48,28 @@ def _check_ownership(request, obj, owner_field='session_key'):
     return owner_value == current_key
 
 
+def _sanitize_filename(name):
+    """
+    Sanitize an uploaded filename to prevent SuspiciousFileOperation
+    caused by extremely long names or invalid characters.
+    """
+    import os
+    from django.utils.text import get_valid_filename
+
+    name = get_valid_filename(name)
+    base, ext = os.path.splitext(name)
+    # Truncate base to avoid path-length issues and collision loops.
+    # 150 chars base + suffix + ext keeps total path well under 260
+    # even after adding Django's uniqueness suffixes (_1, _2 ...).
+    max_base_len = 150
+    if len(base) > max_base_len:
+        base = base[:max_base_len]
+    # Fallback if the whole name was invalid chars
+    if not base:
+        base = "upload"
+    return base + ext
+
+
 def home(request):
     form = MultiFileUploadForm()
 
@@ -67,6 +89,9 @@ def home(request):
 
             try:
                 for file_obj in files:
+                    # Sanitize filename to prevent SuspiciousFileOperation
+                    # from extremely long names colliding in storage.
+                    file_obj.name = _sanitize_filename(file_obj.name)
                     filename = file_obj.name.lower()
                     if filename.endswith('.pdf'):
                         file_type = 'pdf'

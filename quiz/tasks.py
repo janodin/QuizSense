@@ -13,19 +13,30 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30, time_limit=600, soft_time_limit=540)
+@shared_task(bind=True, max_retries=3, default_retry_delay=30, time_limit=600, soft_time_limit=540)
 def process_upload_session_task(self, upload_session_id):
     """
     Upload processing: extract text → chunk → embed → generate summary.
     Uses simplified sequential pipeline.
     """
     from django.db import close_old_connections, connection
+    from django.db.utils import OperationalError
     from .services.pipeline_service import process_upload_session_simple
 
     close_old_connections()
 
     try:
         process_upload_session_simple(upload_session_id)
+    except OperationalError as db_exc:
+        logger.warning(
+            "Upload session DB connection dropped for session %s: %s. Retrying...",
+            upload_session_id,
+            db_exc,
+        )
+        connection.close()
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=db_exc, countdown=10)
+        raise
     except Exception as exc:
         logger.error("Upload session %s processing failed: %s", upload_session_id, exc)
         if self.request.retries < self.max_retries:
@@ -35,13 +46,14 @@ def process_upload_session_task(self, upload_session_id):
         connection.close()
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30, time_limit=300, soft_time_limit=270)
+@shared_task(bind=True, max_retries=3, default_retry_delay=30, time_limit=300, soft_time_limit=270)
 def generate_quiz_task(self, upload_session_id):
     """
     Generate quiz for an upload session after summary is ready.
     Uses RAG to retrieve context and generates 10 MCQs via AI.
     """
     from django.db import close_old_connections, connection
+    from django.db.utils import OperationalError
     from .models import Quiz, UploadSession
     from .services.pipeline_service import _process_quiz_for_session
 
@@ -72,6 +84,17 @@ def generate_quiz_task(self, upload_session_id):
                     quiz.save(update_fields=["status", "error_message"])
             except Exception as inner_exc:
                 logger.error("Failed to update quiz FAILED status for session %s: %s", upload_session_id, inner_exc)
+    except OperationalError as db_exc:
+        # DB connection dropped (idle timeout). Close stale conn and retry fast.
+        logger.warning(
+            "Quiz DB connection dropped for session %s: %s. Retrying...",
+            upload_session_id,
+            db_exc,
+        )
+        connection.close()
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=db_exc, countdown=10)
+        raise
     except Exception as exc:
         logger.error("Quiz generation failed for session %s: %s", upload_session_id, exc)
         try:
@@ -91,12 +114,13 @@ def generate_quiz_task(self, upload_session_id):
         connection.close()
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=120, time_limit=180, soft_time_limit=150)
+@shared_task(bind=True, max_retries=3, default_retry_delay=30, time_limit=180, soft_time_limit=150)
 def generate_recommendations_task(self, attempt_id):
     """
     Generate AI study recommendations for a completed quiz attempt.
     """
     from django.db import close_old_connections, connection
+    from django.db.utils import OperationalError
     from .models import QuizAttempt
     from .services.pipeline_service import generate_recommendations_for_attempt
 
@@ -125,17 +149,31 @@ def generate_recommendations_task(self, attempt_id):
                     attempt.save(update_fields=["recommendation_status", "recommendation_error"])
             except Exception as inner_exc:
                 logger.error("Failed to update recommendation FAILED status for attempt %s: %s", attempt_id, inner_exc)
+    except OperationalError as db_exc:
+        # DB connection dropped (idle timeout). Close stale conn and retry fast.
+        logger.warning(
+            "Recommendations DB connection dropped for attempt %s: %s. Retrying...",
+            attempt_id,
+            db_exc,
+        )
+        connection.close()
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=db_exc, countdown=10)
+        raise
     except Exception as exc:
         logger.error(
             "Recommendations failed for attempt %s: %s",
             attempt_id,
             exc,
         )
-        close_old_connections()
-        attempt = QuizAttempt.objects.get(id=attempt_id)
-        attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
-        attempt.recommendation_error = str(exc)[:500]
-        attempt.save(update_fields=["recommendation_status", "recommendation_error"])
+        connection.close()
+        try:
+            attempt = QuizAttempt.objects.get(id=attempt_id)
+            attempt.recommendation_status = QuizAttempt.RECOMMENDATION_FAILED
+            attempt.recommendation_error = str(exc)[:500]
+            attempt.save(update_fields=["recommendation_status", "recommendation_error"])
+        except Exception as inner_exc:
+            logger.error("Failed to update recommendation FAILED status for attempt %s: %s", attempt_id, inner_exc)
 
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)

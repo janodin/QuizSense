@@ -115,6 +115,7 @@ class ModelProvider(AIProvider):
         import time
         import requests
         from django.conf import settings
+        from django.db import connection
 
         model = self._fallback_model if use_fallback else self._model
         max_retries = self._max_retries
@@ -144,6 +145,10 @@ class ModelProvider(AIProvider):
                 "max_tokens": max_tokens,
                 "temperature": 0.7,
             }
+
+            # Close DB connection before long HTTP call so PostgreSQL does not
+            # kill an idle connection while we wait for the AI provider.
+            connection.close()
 
             try:
                 response = requests.post(self._url, headers=headers, json=payload, timeout=timeout)
