@@ -415,6 +415,135 @@
   {% endif %}
 </div>
 
+<!-- Content Lineage Evaluation Section -->
+<div class="mb-5">
+  <div class="section-header">
+    <i class="bi bi-shield-check text-primary"></i>
+    Content Lineage Evaluation
+  </div>
+  <p class="methodology-box mb-4">
+    <strong>Methodology:</strong> Content lineage verifies that AI-generated summaries and quiz
+    questions actually contain terms from the uploaded source material. A keyword overlap ratio
+    is computed between the source chunks fed into the AI prompt and the generated output.
+    A score ≥ 0.10 (10% shared vocabulary) is considered verified. Low scores (&lt; 0.05) flag
+    potential hallucinations or heavy reliance on textbook cross-references.
+  </p>
+
+  <div class="row g-4">
+    {% if has_lineage_data %}
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Summary Lineage Pass</div>
+        <div class="metric-value">
+          {% if summary_lineage_pass_rate is not None %}
+            {{ summary_lineage_pass_rate }}%
+          {% else %}
+            <span class="text-muted">N/A</span>
+          {% endif %}
+        </div>
+        <small class="text-muted">Keyword overlap ≥ 10%</small>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Quiz Lineage Pass</div>
+        <div class="metric-value">
+          {% if quiz_lineage_pass_rate is not None %}
+            {{ quiz_lineage_pass_rate }}%
+          {% else %}
+            <span class="text-muted">N/A</span>
+          {% endif %}
+        </div>
+        <small class="text-muted">Keyword overlap ≥ 10%</small>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Avg Summary Lineage</div>
+        <div class="metric-value">{{ avg_summary_lineage_score }}</div>
+        <small class="text-muted">Mean keyword overlap ratio</small>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card text-center">
+        <div class="metric-label mb-2">Low-Lineage Questions</div>
+        <div class="metric-value">
+          {% if lineage_quiz_low_score > 0 %}
+            <span class="text-danger">{{ lineage_quiz_low_score }}</span>
+          {% else %}
+            0
+          {% endif %}
+        </div>
+        <small class="text-muted">Score &lt; 0.05 (possible hallucination)</small>
+      </div>
+    </div>
+    {% else %}
+    <div class="col-12">
+      <div class="empty-state">
+        <i class="bi bi-inbox"></i>
+        <p>No lineage data available yet. Upload a file and generate a quiz to populate lineage metrics.</p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if has_lineage_data %}
+  <div class="row g-4 mt-1">
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Question Lineage Score Distribution</h6>
+        <div class="chart-container">
+          <canvas id="lineageDistributionChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="metric-card">
+        <h6 class="fw-bold mb-3">Recent Questions — Lineage Audit</h6>
+        <div class="table-responsive">
+          <table class="table table-sm data-table mb-0">
+            <thead>
+              <tr>
+                <th>Q#</th>
+                <th>Question</th>
+                <th>Score</th>
+                <th>Status</th>
+                <th>Chunks</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for q in recent_lineage_questions %}
+              <tr>
+                <td>{{ forloop.counter }}</td>
+                <td class="small" style="max-width: 280px;">{{ q.text|truncatechars:70 }}</td>
+                <td>
+                  <span class="badge
+                    {% if q.lineage_score >= 0.15 %}bg-success
+                    {% elif q.lineage_score >= 0.10 %}bg-primary
+                    {% elif q.lineage_score >= 0.05 %}bg-warning
+                    {% else %}bg-danger{% endif %} badge-custom">
+                    {{ q.lineage_score }}
+                  </span>
+                </td>
+                <td>
+                  {% if q.content_lineage_verified %}
+                    <span class="badge bg-success badge-custom">Verified</span>
+                  {% else %}
+                    <span class="badge bg-danger badge-custom">Unverified</span>
+                  {% endif %}
+                </td>
+                <td class="small text-muted">{{ q.source_chunk_ids|length }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
 <!-- Data Transparency Footer -->
 <div class="alert alert-light border mt-4 mb-5">
   <h6 class="fw-bold"><i class="bi bi-info-circle me-2"></i>Data Transparency Notice</h6>
@@ -480,6 +609,41 @@
   {% else %}
   document.getElementById('similarityDistributionChart').parentElement.innerHTML =
     '<div class="empty-state"><i class="bi bi-inbox"></i><p>No retrieval log data available.</p></div>';
+  {% endif %}
+
+  // 2. Lineage Score Distribution Chart (Bar)
+  {% if has_lineage_data %}
+  new Chart(document.getElementById('lineageDistributionChart'), {
+    type: 'bar',
+    data: {
+      labels: ['<0.05', '0.05-0.09', '0.10-0.14', '0.15-0.19', '≥0.20'],
+      datasets: [{
+        label: 'Questions',
+        data: [
+          {{ lineage_buckets.b_0_05 }},
+          {{ lineage_buckets.b_05_10 }},
+          {{ lineage_buckets.b_10_15 }},
+          {{ lineage_buckets.b_15_20 }},
+          {{ lineage_buckets.b_20_plus }}
+        ],
+        backgroundColor: ['#dc3545', '#fd7e14', '#0d6efd', '#198754', '#20c997'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      ...commonOptions,
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#f0f0f0' } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+  {% else %}
+  const lineageChartEl = document.getElementById('lineageDistributionChart');
+  if (lineageChartEl) {
+    lineageChartEl.parentElement.innerHTML =
+      '<div class="empty-state"><i class="bi bi-inbox"></i><p>No lineage data available.</p></div>';
+  }
   {% endif %}
 
 </script>

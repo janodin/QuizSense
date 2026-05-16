@@ -518,6 +518,52 @@ def evaluation(request):
     )
     summary_validation_pass_rate = (summary_stats['validated'] / summary_stats['total'] * 100) if summary_stats['total'] else None
 
+    # ─── Content Lineage Evaluation ───────────────────────────────────────────
+    from .models import Question, UploadSession
+
+    lineage_summary_stats = UploadSession.objects.filter(
+        summary_lineage_score__gt=0
+    ).aggregate(
+        total=Count('id'),
+        verified=Count('id', filter=Q(summary_lineage_verified=True)),
+        avg_score=Avg('summary_lineage_score'),
+    )
+    summary_lineage_pass_rate = (
+        (lineage_summary_stats['verified'] / lineage_summary_stats['total'] * 100)
+        if lineage_summary_stats['total'] else None
+    )
+
+    lineage_quiz_stats = Question.objects.filter(
+        lineage_score__gt=0
+    ).aggregate(
+        total=Count('id'),
+        verified=Count('id', filter=Q(content_lineage_verified=True)),
+        avg_score=Avg('lineage_score'),
+        low_score=Count('id', filter=Q(lineage_score__lt=0.05)),
+    )
+    quiz_lineage_pass_rate = (
+        (lineage_quiz_stats['verified'] / lineage_quiz_stats['total'] * 100)
+        if lineage_quiz_stats['total'] else None
+    )
+
+    # Recent questions with lineage data for the table
+    recent_lineage_questions = list(
+        Question.objects.filter(lineage_score__gt=0)
+        .select_related('quiz__upload_session')
+        .order_by('-id')[:20]
+    )
+
+    # Lineage score buckets for chart
+    lineage_buckets = {
+        'b_0_05': Question.objects.filter(lineage_score__gte=0, lineage_score__lt=0.05).count(),
+        'b_05_10': Question.objects.filter(lineage_score__gte=0.05, lineage_score__lt=0.10).count(),
+        'b_10_15': Question.objects.filter(lineage_score__gte=0.10, lineage_score__lt=0.15).count(),
+        'b_15_20': Question.objects.filter(lineage_score__gte=0.15, lineage_score__lt=0.20).count(),
+        'b_20_plus': Question.objects.filter(lineage_score__gte=0.20).count(),
+    }
+
+    has_lineage_data = lineage_quiz_stats['total'] > 0 or lineage_summary_stats['total'] > 0
+
     context = {
         # RAG Retrieval
         'total_retrieval_logs': total_retrieval_logs,
@@ -529,10 +575,20 @@ def evaluation(request):
 
         # Model Generation
         'metric_stats': metric_stats,
-
         'quiz_validation_pass_rate': round(quiz_validation_pass_rate, 1) if quiz_validation_pass_rate is not None else None,
         'summary_validation_pass_rate': round(summary_validation_pass_rate, 1) if summary_validation_pass_rate is not None else None,
         'has_generation_metrics': GenerationMetric.objects.exists(),
+
+        # Content Lineage
+        'has_lineage_data': has_lineage_data,
+        'summary_lineage_pass_rate': round(summary_lineage_pass_rate, 1) if summary_lineage_pass_rate is not None else None,
+        'quiz_lineage_pass_rate': round(quiz_lineage_pass_rate, 1) if quiz_lineage_pass_rate is not None else None,
+        'avg_summary_lineage_score': round(lineage_summary_stats['avg_score'] or 0, 3),
+        'avg_quiz_lineage_score': round(lineage_quiz_stats['avg_score'] or 0, 3),
+        'lineage_quiz_total': lineage_quiz_stats['total'],
+        'lineage_quiz_low_score': lineage_quiz_stats['low_score'],
+        'recent_lineage_questions': recent_lineage_questions,
+        'lineage_buckets': lineage_buckets,
     }
 
     return render(request, 'quiz/evaluation.html', context)
