@@ -78,6 +78,20 @@ class Question(models.Model):
     correct_answer = models.CharField(max_length=1, choices=[('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D')])
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Content lineage audit trail
+    source_chunk_ids = models.JSONField(
+        default=list,
+        help_text="UploadedChunk IDs used to generate this question"
+    )
+    content_lineage_verified = models.BooleanField(
+        default=False,
+        help_text="True if keyword overlap check passed against source chunks"
+    )
+    lineage_score = models.FloatField(
+        default=0,
+        help_text="Keyword overlap ratio between source chunks and question text"
+    )
+
     @property
     def choices_items(self):
         return [
@@ -207,6 +221,20 @@ class UploadSession(models.Model):
     processing_started_at = models.DateTimeField(null=True, blank=True)
     processing_completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # Summary content lineage audit trail
+    summary_source_chunk_ids = models.JSONField(
+        default=list,
+        help_text="UploadedChunk IDs used to generate the summary"
+    )
+    summary_lineage_verified = models.BooleanField(
+        default=False,
+        help_text="True if keyword overlap check passed against source chunks"
+    )
+    summary_lineage_score = models.FloatField(
+        default=0,
+        help_text="Keyword overlap ratio between source chunks and summary"
+    )
 
     class Meta:
         ordering = ['-created_at']

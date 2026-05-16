@@ -370,6 +370,37 @@ def _validate_summary(data: Any) -> bool:
     return has_headers and has_content and has_lists
 
 
+def _verify_content_lineage(source_text: str, generated_text: str, threshold: float = 0.10) -> tuple:
+    """
+    Keyword overlap verification between source chunks and AI-generated output.
+    Returns (is_verified: bool, score: float) where score is the overlap ratio.
+    A low threshold (0.10 = 10%) is used because AI paraphrases heavily;
+    this is only meant to flag obvious hallucinations, not measure quality.
+    """
+    import re
+
+    if not source_text or not generated_text:
+        return False, 0.0
+
+    # Extract words >= 4 chars (filters out 'the', 'and', etc. while keeping concepts)
+    def _extract_words(text: str) -> set:
+        return set(re.findall(r'\b[a-zA-Z]{4,}\b', text.lower()))
+
+    source_words = _extract_words(source_text)
+    gen_words = _extract_words(generated_text)
+
+    if not source_words:
+        return False, 0.0
+
+    overlap = len(source_words & gen_words) / len(source_words)
+    return overlap >= threshold, round(overlap, 4)
+
+
+def _build_source_text_from_chunks(chunks) -> str:
+    """Concatenate chunk contents into a single source text for lineage checking."""
+    return "\n\n".join(getattr(c, "content", "") for c in chunks if getattr(c, "content", ""))
+
+
 def _process_summary_for_session(upload_session: UploadSession, timer=None) -> GenerationResult:
     chapter_title = (
         upload_session.chapter.title if upload_session.chapter else "Fundamentals of Programming"
@@ -423,6 +454,12 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
             cross_ref = rag_result['cross_reference_notes']
             _detail(f"RAG context ready: {len(combined_text)} chars")
 
+            # Capture chunk IDs for lineage audit BEFORE AI generation
+            session_chunks = rag_result.get('session_chunks', [])
+            textbook_chunks = rag_result.get('textbook_chunks', [])
+            all_source_chunk_ids = [c.id for c in session_chunks if hasattr(c, 'id')] + [c.id for c in textbook_chunks if hasattr(c, 'id')]
+            source_text_for_verification = _build_source_text_from_chunks(session_chunks + textbook_chunks)
+
             if total_len > 15000:
                 _detail(f"Long document ({total_len} chars) — using map-reduce summary with RAG context...")
                 result = _map_reduce_summary(
@@ -443,9 +480,24 @@ def _process_summary_for_session(upload_session: UploadSession, timer=None) -> G
             if result and result.success:
                 if _validate_summary(result.data):
                     _detail(f"AI response received: {len(result.data)} chars")
+
+                    # Content lineage verification (Option 1)
+                    lineage_ok, lineage_score = _verify_content_lineage(
+                        source_text_for_verification, result.data, threshold=0.10
+                    )
+                    _detail(f"Summary lineage check: verified={lineage_ok}, score={lineage_score}")
+
                     upload_session.summary = result.data
+                    upload_session.summary_source_chunk_ids = all_source_chunk_ids
+                    upload_session.summary_lineage_verified = lineage_ok
+                    upload_session.summary_lineage_score = lineage_score
                     close_old_connections()
-                    upload_session.save(update_fields=["summary"])
+                    upload_session.save(update_fields=[
+                        "summary",
+                        "summary_source_chunk_ids",
+                        "summary_lineage_verified",
+                        "summary_lineage_score",
+                    ])
                     cache.set(cache_key, result.data, timeout=60 * 60 * 24 * 7)
                 else:
                     _detail("Summary validation failed")
@@ -686,6 +738,7 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
             context_text = rag_result['context_text']
             cross_ref = rag_result['cross_reference_notes']
 
+            raw_session_chunks = []
             if not context_text:
                 # Fallback: build minimal context from uploaded chunks if RAG returns nothing
                 raw_session_chunks = list(
@@ -701,6 +754,18 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
                     _detail(f"RAG returned empty — using {len(raw_session_chunks[:8])} direct chunks as fallback")
 
             if result is None:
+                # Capture chunk IDs for lineage audit BEFORE AI generation
+                # If RAG fallback was used, raw_session_chunks are the actual source.
+                session_chunks = rag_result.get('session_chunks', [])
+                textbook_chunks = rag_result.get('textbook_chunks', [])
+                if raw_session_chunks:
+                    # Fallback path: use the direct chunks loaded from DB
+                    session_chunks = raw_session_chunks[:8]
+                    textbook_chunks = []
+
+                all_source_chunk_ids = [c.id for c in session_chunks if hasattr(c, 'id')] + [c.id for c in textbook_chunks if hasattr(c, 'id')]
+                source_text_for_verification = _build_source_text_from_chunks(session_chunks + textbook_chunks)
+
                 rag_context = GenerationContext(
                     context_text=context_text,
                     cross_reference_notes=cross_ref,
@@ -774,6 +839,13 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
                         for mcq in result.data[:10]:
                             choices = mcq.get("choices") or {}
                             topic = find_topic_for_chapter(chapter, mcq.get("topic", ""), create=True, existing_topics=existing_topics)
+
+                            # Content lineage verification per question (Option 1)
+                            q_full_text = f"{mcq.get('question', '')} {choices.get('A', '')} {choices.get('B', '')} {choices.get('C', '')} {choices.get('D', '')}"
+                            lineage_ok, lineage_score = _verify_content_lineage(
+                                source_text_for_verification, q_full_text, threshold=0.10
+                            )
+
                             questions_to_create.append(
                                 Question(
                                     chapter=chapter,
@@ -785,8 +857,12 @@ def _process_quiz_for_session(upload_session) -> GenerationResult:
                                     choice_c=choices.get("C", ""),
                                     choice_d=choices.get("D", ""),
                                     correct_answer=mcq["correct_answer"],
+                                    source_chunk_ids=all_source_chunk_ids,
+                                    content_lineage_verified=lineage_ok,
+                                    lineage_score=lineage_score,
                                 )
                             )
+                            _detail(f"Q lineage: verified={lineage_ok}, score={lineage_score}")
 
                         with transaction.atomic():
                             quiz.questions.clear()
