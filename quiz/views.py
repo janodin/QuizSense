@@ -3,6 +3,7 @@ from django.http import HttpResponseForbidden, JsonResponse
 from django.contrib import messages
 from django.utils import timezone
 from django.db import transaction
+from django.core.paginator import Paginator
 from django.db.models import Avg, Count, Q, F, Sum, FloatField
 from django.db.models.functions import Cast, Extract
 from django.views.decorators.cache import cache_page
@@ -546,12 +547,14 @@ def evaluation(request):
         if lineage_quiz_stats['total'] else None
     )
 
-    # Recent questions with lineage data for the table
-    recent_lineage_questions = list(
+    # Recent questions with lineage data for the table (paginated, 20 total, 5 per page)
+    lineage_questions_list = list(
         Question.objects.filter(lineage_score__gt=0)
-        .select_related('quiz__upload_session')
-        .order_by('-id')[:20]
+        .order_by('-created_at')[:20]
     )
+    lineage_paginator = Paginator(lineage_questions_list, 5)
+    lineage_page = request.GET.get('lineage_page', 1)
+    recent_lineage_questions = lineage_paginator.get_page(lineage_page)
 
     # Lineage score buckets for chart
     lineage_buckets = {

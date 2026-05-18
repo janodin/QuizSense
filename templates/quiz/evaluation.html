@@ -500,6 +500,7 @@
     <div class="col-lg-6">
       <div class="metric-card">
         <h6 class="fw-bold mb-3">Recent Questions — Lineage Audit</h6>
+        <div id="lineage-table-container">
         <div class="table-responsive">
           <table class="table table-sm data-table mb-0">
             <thead>
@@ -514,7 +515,7 @@
             <tbody>
               {% for q in recent_lineage_questions %}
               <tr>
-                <td>{{ forloop.counter }}</td>
+                <td>{{ recent_lineage_questions.start_index|add:forloop.counter0 }}</td>
                 <td class="small" style="max-width: 280px;">{{ q.text|truncatechars:70 }}</td>
                 <td>
                   <span class="badge
@@ -537,6 +538,36 @@
               {% endfor %}
             </tbody>
           </table>
+          {% if recent_lineage_questions.paginator.num_pages > 1 %}
+          <nav aria-label="Lineage audit pagination" class="mt-2">
+            <ul class="pagination pagination-sm justify-content-center mb-0">
+              {% if recent_lineage_questions.has_previous %}
+                <li class="page-item">
+                  <a class="page-link" href="?{% for k, v in request.GET.items %}{% if k != 'lineage_page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}lineage_page={{ recent_lineage_questions.previous_page_number }}">&laquo;</a>
+                </li>
+              {% else %}
+                <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+              {% endif %}
+              {% for num in recent_lineage_questions.paginator.page_range %}
+                {% if num == recent_lineage_questions.number %}
+                  <li class="page-item active" aria-current="page"><span class="page-link">{{ num }}</span></li>
+                {% else %}
+                  <li class="page-item">
+                    <a class="page-link" href="?{% for k, v in request.GET.items %}{% if k != 'lineage_page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}lineage_page={{ num }}">{{ num }}</a>
+                  </li>
+                {% endif %}
+              {% endfor %}
+              {% if recent_lineage_questions.has_next %}
+                <li class="page-item">
+                  <a class="page-link" href="?{% for k, v in request.GET.items %}{% if k != 'lineage_page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}lineage_page={{ recent_lineage_questions.next_page_number }}">&raquo;</a>
+                </li>
+              {% else %}
+                <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+              {% endif %}
+            </ul>
+          </nav>
+          {% endif %}
+        </div>
         </div>
       </div>
     </div>
@@ -646,5 +677,33 @@
   }
   {% endif %}
 
+  // AJAX pagination for lineage audit table
+  document.addEventListener('click', function(e) {
+    const link = e.target.closest('#lineage-table-container a.page-link');
+    if (!link) return;
+    e.preventDefault();
+    const url = new URL(link.getAttribute('href'), window.location.href).href;
+    fetch(url)
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      })
+      .then(function(html) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const newContainer = doc.getElementById('lineage-table-container');
+        const currentContainer = document.getElementById('lineage-table-container');
+        if (newContainer && currentContainer) {
+          currentContainer.innerHTML = newContainer.innerHTML;
+          history.pushState(null, '', url);
+        } else {
+          window.location.href = url;
+        }
+      })
+      .catch(function(err) {
+        console.error('Pagination error:', err);
+        window.location.href = url;
+      });
+  });
 </script>
 {% endblock %}

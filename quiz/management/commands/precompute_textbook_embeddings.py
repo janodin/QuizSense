@@ -130,7 +130,7 @@ class Command(BaseCommand):
                     embedding_version=EMBEDDING_VERSION,
                     source_hash=file_hash,
                 ).count()
-                self.stdout.write(self.style.SUCCESS(f'  ⊗ Already embedded ({existing_count} chunks) — skipping'))
+                self.stdout.write(self.style.SUCCESS(f'  [SKIP] Already embedded ({existing_count} chunks) -- skipping'))
                 skipped_files += 1
                 continue
 
@@ -147,17 +147,17 @@ class Command(BaseCommand):
                     with file_path.open('rb') as file_obj:
                         text = extract_text_from_docx(file_obj)
                 else:
-                    self.stdout.write(self.style.WARNING(f'  ⊗ Unsupported file type: {file_path.suffix}'))
+                    self.stdout.write(self.style.WARNING(f'  [SKIP] Unsupported file type: {file_path.suffix}'))
                     continue
 
                 text = (text or '').replace('\x00', ' ')
 
                 if not text or len(text.strip()) < 100:
-                    self.stdout.write(self.style.WARNING(f'  ⊗ Insufficient text extracted ({len(text)} chars)'))
+                    self.stdout.write(self.style.WARNING(f'  [SKIP] Insufficient text extracted ({len(text)} chars)'))
                     failed_files.append((file_name, 'Insufficient text'))
                     continue
 
-                self.stdout.write(f'  ✓ Extracted {len(text)} characters')
+                self.stdout.write(f'  [OK] Extracted {len(text)} characters')
 
                 # Match chapter
                 chapter = self._match_chapter(file_path, chapters, chapters_by_number, chapter_mapping)
@@ -165,20 +165,20 @@ class Command(BaseCommand):
                 # Delete old embeddings for this file if they exist
                 if TextbookChunk.objects.filter(source_title=file_name).exists():
                     old_count, _ = TextbookChunk.objects.filter(source_title=file_name).delete()
-                    self.stdout.write(f'  ✓ Removed {old_count} old embeddings for this file')
+                    self.stdout.write(f'  [OK] Removed {old_count} old embeddings for this file')
 
                 # Chunk text
                 chunks = split_text_into_chunks(text)
-                self.stdout.write(f'  ✓ Split into {len(chunks)} chunks')
+                self.stdout.write(f'  [OK] Split into {len(chunks)} chunks')
 
                 if not chunks:
-                    self.stdout.write(self.style.WARNING(f'  ⊗ No chunks created'))
+                    self.stdout.write(self.style.WARNING(f'  [SKIP] No chunks created'))
                     failed_files.append((file_name, 'No chunks'))
                     continue
 
                 # Generate embeddings in batches
                 embeddings = embed_texts_batched(chunks, batch_size=batch_size)
-                self.stdout.write(f'  ✓ Generated {len(embeddings)} embeddings')
+                self.stdout.write(f'  [OK] Generated {len(embeddings)} embeddings')
 
                 # Save to database
                 textbook_chunks = []
@@ -204,7 +204,7 @@ class Command(BaseCommand):
                 successful_files += 1
                 chapter_distribution[chapter.number] += len(textbook_chunks)
                 self.stdout.write(self.style.SUCCESS(
-                    f'  ✓ Saved {len(textbook_chunks)} chunks (Chapter {chapter.number})\n'
+                    f'  [OK] Saved {len(textbook_chunks)} chunks (Chapter {chapter.number})\n'
                 ))
 
                 # GC between files
@@ -212,7 +212,7 @@ class Command(BaseCommand):
                 gc.collect()
 
             except Exception as e:
-                self.stdout.write(self.style.ERROR(f'  ✗ Error: {str(e)}\n'))
+                self.stdout.write(self.style.ERROR(f'  [ERR] Error: {str(e)}\n'))
                 failed_files.append((file_name, str(e)))
 
         # Summary
